@@ -1,0 +1,11 @@
+inherits_from: default
+
+exclude_inherited_files:
+  - standards/backend/*
+  - standards/global/coding-style.md
+  - standards/global/tech-stack.md
+  - standards/global/conventions.md
+  - standards/frontend/css.md
+  - standards/testing/*
+  - standards/global/tech-stack.md
+  - standards/global/conventions.md
