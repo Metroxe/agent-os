@@ -1,0 +1,5 @@
+inherits_from: christopher-default
+
+# Uncomment and modify to exclude specific inherited files:
+exclude_inherited_files:
+  - standards/frontend/*
