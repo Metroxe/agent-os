@@ -6,122 +6,86 @@ Follow this MULTI-PHASE process:
 
 ---
 
-## PHASE 1: Gather Research Context
+## PHASE 1: Gather All Context (Single Intake)
 
-### Step 1.1: Ask the Research Question
+### Step 1.1: Check for Previous Research
 
-Ask the user what they are trying to figure out:
+Before asking questions, check if `agent-os/research/` exists and contains any files. If it does, include them in the prompt below.
 
-```
-What are you trying to research or figure out?
+### Step 1.2: Ask All Questions at Once
 
-Please describe your question or topic as clearly as possible.
-```
-
-**STOP and wait for user response.**
-
-### Step 1.2: Check for Previous Research
-
-Check if `agent-os/research/` exists and contains any files.
-
-If previous research exists, present it to the user:
+Present all questions in a single prompt:
 
 ```
-I found previous research files:
-
-1. [filename-1.md] - [first line or title]
-2. [filename-2.md] - [first line or title]
-...
-
-Should I consider any of these for context? (enter numbers, or "none"):
-```
-
-**STOP and wait for user response.**
-
-If no previous research exists, skip this step.
-
-### Step 1.3: Ask Research Mode
-
-Ask the user how they want you to operate:
-
-```
-How would you like me to conduct this research?
-
-1. **Checkpoints** - I'll pause at key decision points to check in with you before proceeding
-2. **Autonomous** - I'll work through the research independently and present final results
-
-Which mode? (1 or 2):
-```
-
-**STOP and wait for user response.**
+I'll help you research something. Please answer all of the following:
 
 ---
 
-## PHASE 2: Determine Available Resources
+**1. Research Question**
+What are you trying to figure out? Describe your question or topic clearly.
 
-### Step 2.1: Ask About Websites
+---
 
-```
-Are there any specific websites I should access for this research?
+**2. Previous Research**
+[If previous research exists, list files here:]
+- [filename-1.md] - [first line or title]
+- [filename-2.md] - [first line or title]
 
-If yes, please list them. For each site, indicate if credentials are required:
+Should I consider any of these? (enter numbers, or "none")
+
+[If no previous research exists, omit this section entirely]
+
+---
+
+**3. Research Mode**
+How should I conduct this research?
+- **Checkpoints** - I'll pause at key decisions to check in with you
+- **Autonomous** - I'll work independently and present final results
+
+---
+
+**4. Websites**
+Any specific websites I should access? For each, indicate if login is needed:
 - Example: "docs.example.com (no auth)"
 - Example: "admin.example.com (needs login)"
 
-If none, just say "none".
-```
+(or "none")
 
-**STOP and wait for user response.**
+---
 
-For sites requiring credentials, note that you will navigate to the login page and the user will manually log in before continuing.
-
-### Step 2.2: Ask About CLI Tools
-
-```
-Which CLI tools do I have access to for this research?
-
-Common examples:
+**5. CLI Tools**
+Which CLI tools do I have access to?
 - gh (GitHub CLI)
 - gcloud (Google Cloud)
 - aws (AWS CLI)
 - kubectl (Kubernetes)
 - Other: [specify]
 
-List the tools available, or "none":
-```
+(or "none")
 
-**STOP and wait for user response.**
+---
 
-### Step 2.3: Ask About MCP Servers
-
-```
-Are there any particular MCP servers I should use for this research?
-
-Examples:
+**6. MCP Servers**
+Any MCP servers I should use?
 - GitHub MCP (for repository/issue/PR queries)
 - Database MCPs
 - Custom organization MCPs
 
-List any MCP servers to use, or "none":
-```
-
-**STOP and wait for user response.**
-
-### Step 2.4: Ask About Repositories
-
-```
-Do any repositories need to be cloned for this research?
-
-If yes, provide the repo URLs. I will clone them to `agent-os/repos/`.
-
-If none, just say "none".
-```
-
-**STOP and wait for user response.**
+(or "none")
 
 ---
 
-## PHASE 3: Execute Research (Strict Read-Only)
+**7. Repositories**
+Any repos that need to be cloned? Provide URLs and I'll clone to `agent-os/repos/`.
+
+(or "none")
+```
+
+**STOP and wait for user response with all answers.**
+
+---
+
+## PHASE 2: Execute Research (Strict Read-Only)
 
 ### READ-ONLY ENFORCEMENT - CRITICAL
 
@@ -152,7 +116,7 @@ You have **ZERO write permissions** during this research. This is non-negotiable
 - Browser navigation and reading (no form submissions that change data)
 - MCP tools that only read/list/search (no create, update, delete operations)
 
-### Step 3.1: Browser Authentication (If Needed)
+### Step 2.1: Browser Authentication (If Needed)
 
 For each site that requires credentials:
 
@@ -168,7 +132,7 @@ Please log in manually in the browser. Tell me when you're ready to continue.
 3. **STOP and wait for user confirmation**
 4. Continue research on the authenticated session
 
-### Step 3.2: Clone Repositories (If Needed)
+### Step 2.2: Clone Repositories (If Needed)
 
 For each repository that needs to be cloned:
 
@@ -196,7 +160,7 @@ Tell me when done.
 
 5. **NEVER fork** - forking is a write action and is forbidden
 
-### Step 3.3: Conduct Research
+### Step 2.3: Conduct Research
 
 Execute your research using the allowed resources:
 
@@ -223,13 +187,13 @@ Your choice:
 
 ---
 
-## PHASE 4: Generate Research Report
+## PHASE 3: Generate Research Report
 
-### Step 4.1: Create Research Directory
+### Step 3.1: Create Research Directory
 
 If `agent-os/research/` does not exist, create it.
 
-### Step 4.2: Generate Report
+### Step 3.2: Generate Report
 
 Create the research report with today's date and a kebab-case topic name.
 
@@ -243,7 +207,7 @@ Create the research report with today's date and a kebab-case topic name.
 # Research: [Topic Title]
 
 **Date:** YYYY-MM-DD
-**Original Request:** [Exact user question from Step 1.1]
+**Original Request:** [Exact user question from the intake]
 
 ---
 
@@ -296,7 +260,7 @@ If no inferences were made, state: "All conclusions are directly supported by so
    ...
 ```
 
-### Step 4.3: Save and Confirm
+### Step 3.3: Save and Confirm
 
 Save the report to `agent-os/research/[filename].md`.
 
