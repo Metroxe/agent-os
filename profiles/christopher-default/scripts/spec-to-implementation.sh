@@ -296,7 +296,7 @@ Tasks: $SPEC_PATH/tasks.md"
     echo ""
     echo "Creating PR..."
     PR_URL=$(gh pr create \
-      --title "Implement: $SPEC_FOLDER" \
+      --title "feat: $SPEC_FOLDER" \
       --body "## Summary
 
 Automated implementation of \`$SPEC_FOLDER\` spec.
