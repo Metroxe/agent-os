@@ -90,20 +90,95 @@ echo "  SPEC TO IMPLEMENTATION: $SPEC_FOLDER"
 echo "============================================"
 echo ""
 
+# Ask about CLI tool
+echo "CLI tool:"
+echo "  1) Claude Code (claude)"
+echo "  2) Cursor CLI (agent)"
+echo ""
+read -p "Choose CLI tool (1/2) [1]: " CLI_TOOL
+CLI_TOOL=${CLI_TOOL:-1}
+echo ""
+
+# Ask about model
+echo "Model:"
+echo "  1) Default (use CLI default)"
+
+# Fetch available models dynamically
+if [[ "$CLI_TOOL" == "2" ]]; then
+  # Cursor CLI
+  MODELS_OUTPUT=$(agent models 2>/dev/null || echo "")
+else
+  # Claude Code - try to get models, fall back to static list
+  MODELS_OUTPUT=$(claude models 2>/dev/null || echo "")
+fi
+
+# Parse models into array (one per line, skip empty lines)
+MODELS=()
+if [[ -n "$MODELS_OUTPUT" ]]; then
+  while IFS= read -r line; do
+    # Skip empty lines and header lines
+    [[ -z "$line" ]] && continue
+    [[ "$line" == *"Available"* ]] && continue
+    [[ "$line" == *"---"* ]] && continue
+    # Clean up the line (remove leading/trailing whitespace, bullets, etc.)
+    model=$(echo "$line" | sed 's/^[[:space:]]*[-*]*[[:space:]]*//' | sed 's/[[:space:]]*$//')
+    [[ -n "$model" ]] && MODELS+=("$model")
+  done <<< "$MODELS_OUTPUT"
+fi
+
+# If no models found, use static fallback
+if [[ ${#MODELS[@]} -eq 0 ]]; then
+  MODELS=("claude-sonnet-4-20250514" "claude-opus-4-20250514" "gpt-4o" "o3")
+fi
+
+# Display models
+for i in "${!MODELS[@]}"; do
+  echo "  $((i + 2))) ${MODELS[$i]}"
+done
+echo ""
+
+MAX_CHOICE=$((${#MODELS[@]} + 1))
+read -p "Choose model (1-$MAX_CHOICE) [1]: " MODEL_CHOICE
+MODEL_CHOICE=${MODEL_CHOICE:-1}
+
+if [[ "$MODEL_CHOICE" -gt 1 && "$MODEL_CHOICE" -le "$MAX_CHOICE" ]]; then
+  SELECTED_MODEL="${MODELS[$((MODEL_CHOICE - 2))]}"
+  MODEL_FLAG="--model $SELECTED_MODEL"
+else
+  MODEL_FLAG=""
+fi
+echo ""
+
 # Ask about execution mode
 echo "Execution mode:"
-echo "  1) Automated - Claude runs without interaction (faster, less control)"
-echo "  2) Interactive - You can watch and approve each action (slower, more control)"
+echo "  1) Automated - runs without interaction (faster, less control)"
+echo "  2) Interactive - you can watch and approve each action (slower, more control)"
 echo ""
 read -p "Choose mode (1/2) [1]: " EXEC_MODE
 EXEC_MODE=${EXEC_MODE:-1}
 
-if [[ "$EXEC_MODE" == "1" ]]; then
-  CLAUDE_CMD="claude --dangerously-skip-permissions -p"
-  echo "Using automated mode."
+if [[ "$CLI_TOOL" == "2" ]]; then
+  # Cursor CLI
+  if [[ "$EXEC_MODE" == "1" ]]; then
+    CLI_CMD="agent -p --force $MODEL_FLAG"
+    echo "Using Cursor CLI in automated mode."
+  else
+    CLI_CMD="agent $MODEL_FLAG"
+    echo "Using Cursor CLI in interactive mode."
+  fi
 else
-  CLAUDE_CMD="claude"
-  echo "Using interactive mode. Type /exit after each phase to continue."
+  # Claude Code (default)
+  if [[ "$EXEC_MODE" == "1" ]]; then
+    CLI_CMD="claude --dangerously-skip-permissions -p $MODEL_FLAG"
+    echo "Using Claude Code in automated mode."
+  else
+    CLI_CMD="claude $MODEL_FLAG"
+    echo "Using Claude Code in interactive mode. Type /exit after each phase to continue."
+  fi
+fi
+
+if [[ -n "$MODEL_FLAG" ]]; then
+  echo "Model: ${MODEL_FLAG#--model }"
 fi
 echo ""
 
@@ -141,10 +216,10 @@ echo "============================================"
 echo "  PHASE 1: Writing Specification"
 echo "============================================"
 echo ""
-echo "Claude will run /write-spec..."
+echo "Running /write-spec..."
 echo ""
 
-$CLAUDE_CMD "Run /write-spec for $SPEC_PATH. Complete it fully without stopping for intermediate confirmation messages. When the spec.md is written, you're done."
+$CLI_CMD "Run /write-spec for $SPEC_PATH. Complete it fully without stopping for intermediate confirmation messages. When the spec.md is written, you're done."
 
 # === Phase 2: Create Tasks ===
 echo ""
@@ -153,7 +228,7 @@ echo "  PHASE 2: Creating Tasks"
 echo "============================================"
 echo ""
 
-$CLAUDE_CMD "Run /create-tasks for $SPEC_PATH. Complete it fully without stopping for intermediate confirmation messages. When tasks.md is written, you're done."
+$CLI_CMD "Run /create-tasks for $SPEC_PATH. Complete it fully without stopping for intermediate confirmation messages. When tasks.md is written, you're done."
 
 # === Phase 3: Generate Prompts ===
 echo ""
@@ -162,7 +237,7 @@ echo "  PHASE 3: Generating Implementation Prompts"
 echo "============================================"
 echo ""
 
-$CLAUDE_CMD "Run /orchestrate-tasks for $SPEC_PATH. Generate the prompt files to implementation/prompts/. When the prompt files are created, you're done."
+$CLI_CMD "Run /orchestrate-tasks for $SPEC_PATH. Generate the prompt files to implementation/prompts/. When the prompt files are created, you're done."
 
 # === Phase 4: Implement Each Task Group ===
 echo ""
@@ -189,7 +264,7 @@ else
     echo "--------------------------------------------"
     echo ""
     
-    $CLAUDE_CMD "Execute the instructions in @$prompt_file fully. Mark completed tasks in $SPEC_PATH/tasks.md when done."
+    $CLI_CMD "Execute the instructions in @$prompt_file fully. Mark completed tasks in $SPEC_PATH/tasks.md when done."
   done
 fi
 
