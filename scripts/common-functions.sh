@@ -1466,3 +1466,46 @@ install_improve_skills_command() {
         fi
     fi
 }
+
+# Install utility scripts from profile to project
+install_utility_scripts() {
+    local scripts_count=0
+    local target_dir="$PROJECT_DIR/agent-os/scripts"
+
+    # Get all script files from profile (using same inheritance logic as standards)
+    local script_files=$(get_profile_files "$EFFECTIVE_PROFILE" "$BASE_DIR" "scripts" 2>/dev/null || true)
+
+    # If no scripts in profile, return silently
+    if [[ -z "$script_files" ]]; then
+        return 0
+    fi
+
+    if [[ "$DRY_RUN" != "true" ]]; then
+        print_status "Installing utility scripts"
+    fi
+
+    ensure_dir "$target_dir"
+
+    while read file; do
+        if [[ "$file" == scripts/* ]]; then
+            local source=$(get_profile_file "$EFFECTIVE_PROFILE" "$file" "$BASE_DIR")
+            local filename=$(basename "$file")
+            local dest="$target_dir/$filename"
+
+            if [[ -f "$source" ]]; then
+                cp "$source" "$dest"
+                chmod +x "$dest"
+                if [[ "$DRY_RUN" == "true" ]]; then
+                    INSTALLED_FILES+=("$dest")
+                fi
+                ((scripts_count++)) || true
+            fi
+        fi
+    done <<< "$script_files"
+
+    if [[ "$DRY_RUN" != "true" ]]; then
+        if [[ $scripts_count -gt 0 ]]; then
+            echo "✓ Installed $scripts_count utility scripts in agent-os/scripts"
+        fi
+    fi
+}

@@ -427,6 +427,9 @@ perform_installation() {
             install_agent_os_commands
         fi
 
+        # Install utility scripts
+        install_utility_scripts
+
         echo ""
         print_status "The following files would be created:"
         for file in "${INSTALLED_FILES[@]}"; do
@@ -463,6 +466,10 @@ perform_installation() {
             install_agent_os_commands
             echo ""
         fi
+
+        # Install utility scripts
+        install_utility_scripts
+        echo ""
     fi
 
     if [[ "$DRY_RUN" == "true" ]]; then

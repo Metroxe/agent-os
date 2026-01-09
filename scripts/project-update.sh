@@ -612,6 +612,10 @@ perform_update() {
         echo ""
     fi
 
+    # Install/update utility scripts
+    install_utility_scripts
+    echo ""
+
     if [[ "$DRY_RUN" == "true" ]]; then
         print_warning "DRY RUN - No files were actually modified"
         echo ""
