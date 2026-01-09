@@ -10,12 +10,13 @@
 
 set -e
 
-SPEC_FOLDER="${1:-}"
+SPEC_INPUT="${1:-}"
 
-if [ -z "$SPEC_FOLDER" ]; then
+if [ -z "$SPEC_INPUT" ]; then
   echo "Usage: spec-to-implementation.sh <spec-folder-name>"
   echo ""
-  echo "Example: spec-to-implementation.sh user-authentication"
+  echo "Example: spec-to-implementation.sh 2026-01-08-my-feature"
+  echo "     or: spec-to-implementation.sh ./agent-os/specs/2026-01-08-my-feature"
   echo ""
   echo "This script will:"
   echo "  1. Create a safe implementation branch"
@@ -25,6 +26,14 @@ if [ -z "$SPEC_FOLDER" ]; then
   echo "  5. Execute each prompt to implement the feature"
   echo "  6. Commit, push, and create a PR for review"
   exit 1
+fi
+
+# Handle both full paths and just folder names
+if [[ "$SPEC_INPUT" == *"agent-os/specs/"* ]]; then
+  # Extract just the folder name from the path
+  SPEC_FOLDER=$(echo "$SPEC_INPUT" | sed 's|.*agent-os/specs/||' | sed 's|/$||')
+else
+  SPEC_FOLDER="$SPEC_INPUT"
 fi
 
 SPEC_PATH="agent-os/specs/$SPEC_FOLDER"
@@ -37,6 +46,13 @@ BRANCH_NAME="impl/$SPEC_FOLDER"
 if [ ! -d "$SPEC_PATH" ]; then
   echo "Error: Spec folder not found at $SPEC_PATH"
   echo "Run /shape-spec first to create it."
+  exit 1
+fi
+
+# Check that requirements.md exists (created by /shape-spec)
+if [ ! -f "$SPEC_PATH/planning/requirements.md" ]; then
+  echo "Error: requirements.md not found at $SPEC_PATH/planning/requirements.md"
+  echo "Run /shape-spec first to create requirements."
   exit 1
 fi
 
@@ -74,6 +90,23 @@ echo "  SPEC TO IMPLEMENTATION: $SPEC_FOLDER"
 echo "============================================"
 echo ""
 
+# Ask about execution mode
+echo "Execution mode:"
+echo "  1) Automated - Claude runs without interaction (faster, less control)"
+echo "  2) Interactive - You can watch and approve each action (slower, more control)"
+echo ""
+read -p "Choose mode (1/2) [1]: " EXEC_MODE
+EXEC_MODE=${EXEC_MODE:-1}
+
+if [[ "$EXEC_MODE" == "1" ]]; then
+  CLAUDE_CMD="claude --dangerously-skip-permissions -p"
+  echo "Using automated mode."
+else
+  CLAUDE_CMD="claude"
+  echo "Using interactive mode. Type /exit after each phase to continue."
+fi
+echo ""
+
 # Ask about branch strategy
 ORIGINAL_BRANCH=$(git branch --show-current)
 echo "Current branch: $ORIGINAL_BRANCH"
@@ -108,10 +141,10 @@ echo "============================================"
 echo "  PHASE 1: Writing Specification"
 echo "============================================"
 echo ""
-echo "Claude will run /write-spec. Interact as needed, then /exit when done."
+echo "Claude will run /write-spec..."
 echo ""
 
-claude "Run /write-spec for $SPEC_PATH. Complete it fully without stopping for intermediate confirmation messages. When the spec.md is written, you're done with this phase."
+$CLAUDE_CMD "Run /write-spec for $SPEC_PATH. Complete it fully without stopping for intermediate confirmation messages. When the spec.md is written, you're done."
 
 # === Phase 2: Create Tasks ===
 echo ""
@@ -120,7 +153,7 @@ echo "  PHASE 2: Creating Tasks"
 echo "============================================"
 echo ""
 
-claude "Run /create-tasks for $SPEC_PATH. Complete it fully without stopping for intermediate confirmation messages. When tasks.md is written, you're done with this phase."
+$CLAUDE_CMD "Run /create-tasks for $SPEC_PATH. Complete it fully without stopping for intermediate confirmation messages. When tasks.md is written, you're done."
 
 # === Phase 3: Generate Prompts ===
 echo ""
@@ -129,7 +162,7 @@ echo "  PHASE 3: Generating Implementation Prompts"
 echo "============================================"
 echo ""
 
-claude "Run /orchestrate-tasks for $SPEC_PATH. Generate the prompt files to implementation/prompts/. When the prompt files are created, you're done with this phase."
+$CLAUDE_CMD "Run /orchestrate-tasks for $SPEC_PATH. Generate the prompt files to implementation/prompts/. When the prompt files are created, you're done."
 
 # === Phase 4: Implement Each Task Group ===
 echo ""
@@ -156,7 +189,7 @@ else
     echo "--------------------------------------------"
     echo ""
     
-    claude "Execute the instructions in @$prompt_file fully. Mark completed tasks in $SPEC_PATH/tasks.md when done."
+    $CLAUDE_CMD "Execute the instructions in @$prompt_file fully. Mark completed tasks in $SPEC_PATH/tasks.md when done."
   done
 fi
 
