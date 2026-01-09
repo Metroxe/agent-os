@@ -71,6 +71,13 @@ if ! gh auth status &> /dev/null; then
   exit 1
 fi
 
+# Check for jq (required for token usage parsing)
+if ! command -v jq &> /dev/null; then
+  echo "Error: jq not found (required for token usage tracking)."
+  echo "Install it with: brew install jq"
+  exit 1
+fi
+
 # Check for uncommitted changes
 if ! git diff-index --quiet HEAD -- 2>/dev/null; then
   echo "Error: You have uncommitted changes."
@@ -211,6 +218,186 @@ else
   echo ""
 fi
 
+# === TOKEN USAGE TRACKING ===
+
+# Cumulative tracking variables
+TOTAL_INPUT_TOKENS=0
+TOTAL_OUTPUT_TOKENS=0
+TOTAL_CACHE_READ_TOKENS=0
+TOTAL_CACHE_CREATION_TOKENS=0
+TOTAL_COST_USD=0
+TOTAL_DURATION_MS=0
+STEP_COUNT=0
+
+# Format number with commas (works on macOS)
+format_number() {
+  LC_NUMERIC=en_US.UTF-8 printf "%'d" "$1" 2>/dev/null || echo "$1"
+}
+
+# Format cost as USD
+format_cost() {
+  printf "$%.4f" "$1"
+}
+
+# Format duration from ms to human readable
+format_duration() {
+  local ms=$1
+  local seconds=$((ms / 1000))
+  local minutes=$((seconds / 60))
+  local remaining_seconds=$((seconds % 60))
+  if [[ $minutes -gt 0 ]]; then
+    echo "${minutes}m ${remaining_seconds}s"
+  else
+    printf "%.1fs" "$(echo "scale=1; $ms / 1000" | bc)"
+  fi
+}
+
+# Run CLI command and capture JSON output (for automated mode only)
+run_cli_with_tracking() {
+  local phase_name="$1"
+  local prompt="$2"
+  
+  STEP_COUNT=$((STEP_COUNT + 1))
+  
+  if [[ "$EXEC_MODE" == "1" ]]; then
+    # Automated mode: capture JSON output
+    local json_output
+    local exit_code=0
+    
+    if [[ "$CLI_TOOL" == "2" ]]; then
+      # Cursor CLI
+      json_output=$($CLI_CMD --output-format json "$prompt" 2>&1) || exit_code=$?
+    else
+      # Claude Code
+      json_output=$($CLI_CMD --output-format json "$prompt" 2>&1) || exit_code=$?
+    fi
+    
+    if [[ $exit_code -ne 0 ]]; then
+      echo "Warning: CLI command exited with code $exit_code"
+    fi
+    
+    # Parse and display usage
+    parse_and_display_usage "$phase_name" "$json_output"
+    
+    # Print the result text if available
+    local result_text
+    result_text=$(echo "$json_output" | jq -r '.result // empty' 2>/dev/null)
+    if [[ -n "$result_text" ]]; then
+      echo "$result_text"
+    fi
+  else
+    # Interactive mode: run normally without JSON capture
+    $CLI_CMD "$prompt"
+    echo ""
+    echo "  (Token tracking not available in interactive mode)"
+    echo ""
+  fi
+}
+
+# Parse usage from JSON and display summary
+parse_and_display_usage() {
+  local phase_name="$1"
+  local json="$2"
+  
+  # Extract common fields
+  local duration_ms
+  duration_ms=$(echo "$json" | jq -r '.duration_ms // .duration_api_ms // 0' 2>/dev/null)
+  TOTAL_DURATION_MS=$((TOTAL_DURATION_MS + duration_ms))
+  
+  echo ""
+  echo "--------------------------------------------"
+  echo "  Step Summary: $phase_name"
+  echo "--------------------------------------------"
+  
+  if [[ "$CLI_TOOL" == "2" ]]; then
+    # Cursor CLI - limited data available
+    local duration_sec
+    duration_sec=$(echo "scale=1; $duration_ms / 1000" | bc)
+    
+    echo "  Duration:        ${duration_sec}s"
+    echo ""
+    echo "  (Token usage not available with Cursor CLI)"
+  else
+    # Claude Code - full usage data available
+    local input_tokens output_tokens cache_read cache_creation cost_usd
+    
+    input_tokens=$(echo "$json" | jq -r '.usage.input_tokens // 0' 2>/dev/null)
+    output_tokens=$(echo "$json" | jq -r '.usage.output_tokens // 0' 2>/dev/null)
+    cache_read=$(echo "$json" | jq -r '.usage.cache_read_input_tokens // 0' 2>/dev/null)
+    cache_creation=$(echo "$json" | jq -r '.usage.cache_creation_input_tokens // 0' 2>/dev/null)
+    cost_usd=$(echo "$json" | jq -r '.total_cost_usd // 0' 2>/dev/null)
+    
+    # Accumulate totals
+    TOTAL_INPUT_TOKENS=$((TOTAL_INPUT_TOKENS + input_tokens))
+    TOTAL_OUTPUT_TOKENS=$((TOTAL_OUTPUT_TOKENS + output_tokens))
+    TOTAL_CACHE_READ_TOKENS=$((TOTAL_CACHE_READ_TOKENS + cache_read))
+    TOTAL_CACHE_CREATION_TOKENS=$((TOTAL_CACHE_CREATION_TOKENS + cache_creation))
+    TOTAL_COST_USD=$(echo "$TOTAL_COST_USD + $cost_usd" | bc)
+    
+    local total_step_tokens=$((input_tokens + output_tokens + cache_read + cache_creation))
+    local total_all_tokens=$((TOTAL_INPUT_TOKENS + TOTAL_OUTPUT_TOKENS + TOTAL_CACHE_READ_TOKENS + TOTAL_CACHE_CREATION_TOKENS))
+    local duration_sec
+    duration_sec=$(echo "scale=1; $duration_ms / 1000" | bc)
+    
+    echo "  Input tokens:    $(format_number $input_tokens)"
+    echo "  Output tokens:   $(format_number $output_tokens)"
+    if [[ $cache_read -gt 0 ]]; then
+      echo "  Cache read:      $(format_number $cache_read)"
+    fi
+    if [[ $cache_creation -gt 0 ]]; then
+      echo "  Cache created:   $(format_number $cache_creation)"
+    fi
+    echo "  Cost:            $(format_cost $cost_usd)"
+    echo "  Duration:        ${duration_sec}s"
+    echo ""
+    echo "  Running total:   $(format_cost $TOTAL_COST_USD) ($(format_number $total_all_tokens) tokens)"
+  fi
+  
+  echo "--------------------------------------------"
+  echo ""
+}
+
+# Display final usage summary
+display_final_summary() {
+  echo ""
+  echo "============================================"
+  echo "  TOKEN USAGE SUMMARY"
+  echo "============================================"
+  
+  local total_duration_sec
+  total_duration_sec=$(echo "scale=1; $TOTAL_DURATION_MS / 1000" | bc)
+  
+  if [[ "$CLI_TOOL" == "2" ]]; then
+    # Cursor CLI
+    echo ""
+    echo "  Total steps:     $STEP_COUNT"
+    echo "  Total duration:  ${total_duration_sec}s"
+    echo ""
+    echo "  (Detailed token usage not available with Cursor CLI)"
+  else
+    # Claude Code
+    local total_all_tokens=$((TOTAL_INPUT_TOKENS + TOTAL_OUTPUT_TOKENS + TOTAL_CACHE_READ_TOKENS + TOTAL_CACHE_CREATION_TOKENS))
+    
+    echo ""
+    echo "  Total steps:     $STEP_COUNT"
+    echo "  Input tokens:    $(format_number $TOTAL_INPUT_TOKENS)"
+    echo "  Output tokens:   $(format_number $TOTAL_OUTPUT_TOKENS)"
+    if [[ $TOTAL_CACHE_READ_TOKENS -gt 0 ]]; then
+      echo "  Cache read:      $(format_number $TOTAL_CACHE_READ_TOKENS)"
+    fi
+    if [[ $TOTAL_CACHE_CREATION_TOKENS -gt 0 ]]; then
+      echo "  Cache created:   $(format_number $TOTAL_CACHE_CREATION_TOKENS)"
+    fi
+    echo "  --------------------------"
+    echo "  Total tokens:    $(format_number $total_all_tokens)"
+    echo "  Total cost:      $(format_cost $TOTAL_COST_USD)"
+    echo "  Total duration:  ${total_duration_sec}s"
+  fi
+  
+  echo ""
+  echo "============================================"
+}
+
 # === Phase 1: Write Spec ===
 echo "============================================"
 echo "  PHASE 1: Writing Specification"
@@ -219,7 +406,7 @@ echo ""
 echo "Running /write-spec..."
 echo ""
 
-$CLI_CMD "Run /write-spec for $SPEC_PATH. Complete it fully without stopping for intermediate confirmation messages. When the spec.md is written, you're done."
+run_cli_with_tracking "PHASE 1: Write Spec" "Run /write-spec for $SPEC_PATH. Complete it fully without stopping for intermediate confirmation messages. When the spec.md is written, you're done."
 
 # === Phase 2: Create Tasks ===
 echo ""
@@ -228,16 +415,16 @@ echo "  PHASE 2: Creating Tasks"
 echo "============================================"
 echo ""
 
-$CLI_CMD "Run /create-tasks for $SPEC_PATH. Complete it fully without stopping for intermediate confirmation messages. When tasks.md is written, you're done."
+run_cli_with_tracking "PHASE 2: Create Tasks" "Run /create-tasks for $SPEC_PATH. Complete it fully without stopping for intermediate confirmation messages. When tasks.md is written, you're done."
 
 # === Phase 3: Generate Prompts ===
 echo ""
 echo "============================================"
-echo "  PHASE 3: Generating Implementation Prompts"
+echo "  PHASE 3: Generating Prompts"
 echo "============================================"
 echo ""
 
-$CLI_CMD "Run /orchestrate-tasks for $SPEC_PATH. Generate the prompt files to implementation/prompts/. When the prompt files are created, you're done."
+run_cli_with_tracking "PHASE 3: Generate Prompts" "Run /orchestrate-tasks for $SPEC_PATH. Generate the prompt files to implementation/prompts/. When the prompt files are created, you're done."
 
 # === Phase 4: Implement Each Task Group ===
 echo ""
@@ -259,14 +446,17 @@ else
     PROMPT_NAME=$(basename "$prompt_file")
     
     echo ""
-    echo "--------------------------------------------"
-    echo "  Task $CURRENT of $PROMPT_COUNT: $PROMPT_NAME"
-    echo "--------------------------------------------"
+    echo "============================================"
+    echo "  PHASE 4.$CURRENT: $PROMPT_NAME ($CURRENT of $PROMPT_COUNT)"
+    echo "============================================"
     echo ""
     
-    $CLI_CMD "Execute the instructions in @$prompt_file fully. Mark completed tasks in $SPEC_PATH/tasks.md when done."
+    run_cli_with_tracking "PHASE 4.$CURRENT: $PROMPT_NAME" "Execute the instructions in @$prompt_file fully. Mark completed tasks in $SPEC_PATH/tasks.md when done."
   done
 fi
+
+# === Display Token Usage Summary ===
+display_final_summary
 
 # === Commit and Create PR ===
 echo ""
