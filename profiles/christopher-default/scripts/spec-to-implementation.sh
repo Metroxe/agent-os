@@ -106,55 +106,54 @@ read -p "Choose CLI tool (1/2) [1]: " CLI_TOOL
 CLI_TOOL=${CLI_TOOL:-1}
 echo ""
 
-# Ask about model
-echo "Model:"
-echo "  1) Default (use CLI default)"
-
-# Fetch available models dynamically
+# Ask about model (only for Cursor CLI)
 if [[ "$CLI_TOOL" == "2" ]]; then
-  # Cursor CLI
+  echo "Model:"
+  echo "  1) Default (use CLI default)"
+
+  # Fetch available models dynamically
   MODELS_OUTPUT=$(agent models 2>/dev/null || echo "")
+
+  # Parse models into array (one per line, skip empty lines)
+  MODELS=()
+  if [[ -n "$MODELS_OUTPUT" ]]; then
+    while IFS= read -r line; do
+      # Skip empty lines and header lines
+      [[ -z "$line" ]] && continue
+      [[ "$line" == *"Available"* ]] && continue
+      [[ "$line" == *"---"* ]] && continue
+      # Clean up the line (remove leading/trailing whitespace, bullets, etc.)
+      model=$(echo "$line" | sed 's/^[[:space:]]*[-*]*[[:space:]]*//' | sed 's/[[:space:]]*$//')
+      [[ -n "$model" ]] && MODELS+=("$model")
+    done <<< "$MODELS_OUTPUT"
+  fi
+
+  # If no models found, use static fallback
+  if [[ ${#MODELS[@]} -eq 0 ]]; then
+    MODELS=("claude-sonnet-4-20250514" "claude-opus-4-20250514" "gpt-4o" "o3")
+  fi
+
+  # Display models
+  for i in "${!MODELS[@]}"; do
+    echo "  $((i + 2))) ${MODELS[$i]}"
+  done
+  echo ""
+
+  MAX_CHOICE=$((${#MODELS[@]} + 1))
+  read -p "Choose model (1-$MAX_CHOICE) [1]: " MODEL_CHOICE
+  MODEL_CHOICE=${MODEL_CHOICE:-1}
+
+  if [[ "$MODEL_CHOICE" -gt 1 && "$MODEL_CHOICE" -le "$MAX_CHOICE" ]]; then
+    SELECTED_MODEL="${MODELS[$((MODEL_CHOICE - 2))]}"
+    MODEL_FLAG="--model $SELECTED_MODEL"
+  else
+    MODEL_FLAG=""
+  fi
+  echo ""
 else
-  # Claude Code - try to get models, fall back to static list
-  MODELS_OUTPUT=$(claude models 2>/dev/null || echo "")
-fi
-
-# Parse models into array (one per line, skip empty lines)
-MODELS=()
-if [[ -n "$MODELS_OUTPUT" ]]; then
-  while IFS= read -r line; do
-    # Skip empty lines and header lines
-    [[ -z "$line" ]] && continue
-    [[ "$line" == *"Available"* ]] && continue
-    [[ "$line" == *"---"* ]] && continue
-    # Clean up the line (remove leading/trailing whitespace, bullets, etc.)
-    model=$(echo "$line" | sed 's/^[[:space:]]*[-*]*[[:space:]]*//' | sed 's/[[:space:]]*$//')
-    [[ -n "$model" ]] && MODELS+=("$model")
-  done <<< "$MODELS_OUTPUT"
-fi
-
-# If no models found, use static fallback
-if [[ ${#MODELS[@]} -eq 0 ]]; then
-  MODELS=("claude-sonnet-4-20250514" "claude-opus-4-20250514" "gpt-4o" "o3")
-fi
-
-# Display models
-for i in "${!MODELS[@]}"; do
-  echo "  $((i + 2))) ${MODELS[$i]}"
-done
-echo ""
-
-MAX_CHOICE=$((${#MODELS[@]} + 1))
-read -p "Choose model (1-$MAX_CHOICE) [1]: " MODEL_CHOICE
-MODEL_CHOICE=${MODEL_CHOICE:-1}
-
-if [[ "$MODEL_CHOICE" -gt 1 && "$MODEL_CHOICE" -le "$MAX_CHOICE" ]]; then
-  SELECTED_MODEL="${MODELS[$((MODEL_CHOICE - 2))]}"
-  MODEL_FLAG="--model $SELECTED_MODEL"
-else
+  # Claude Code - use CLI default, no prompt
   MODEL_FLAG=""
 fi
-echo ""
 
 # Ask about execution mode
 echo "Execution mode:"
@@ -173,6 +172,11 @@ if [[ "$CLI_TOOL" == "2" ]]; then
     CLI_CMD="agent $MODEL_FLAG"
     echo "Using Cursor CLI in interactive mode."
   fi
+  if [[ -n "$MODEL_FLAG" ]]; then
+    echo "Model: ${MODEL_FLAG#--model }"
+  else
+    echo "Model: CLI default"
+  fi
 else
   # Claude Code (default)
   if [[ "$EXEC_MODE" == "1" ]]; then
@@ -182,10 +186,7 @@ else
     CLI_CMD="claude $MODEL_FLAG"
     echo "Using Claude Code in interactive mode. Type /exit after each phase to continue."
   fi
-fi
-
-if [[ -n "$MODEL_FLAG" ]]; then
-  echo "Model: ${MODEL_FLAG#--model }"
+  echo "Model: CLI default"
 fi
 echo ""
 
