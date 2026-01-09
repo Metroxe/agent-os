@@ -3,7 +3,7 @@
 ## Commands
 
 ```
-~/agent-os/scripts/project-update.sh --profile nodejs --agent-os-commands true --claude-code-commands false
+~/agent-os/scripts/project-update.sh --profile nodejs --agent-os-commands true --claude-code-commands true --standards_as_claude_code_skills true --use_claude_code_subagents false
 ```
 
 ## Your system for spec-driven agentic development.
