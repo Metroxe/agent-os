@@ -52,6 +52,80 @@ commit_step() {
   echo ""
 }
 
+# Handle CLI errors with recovery options
+handle_cli_error() {
+  local exit_code="$1"
+  local phase_name="$2"
+  local error_output="$3"
+  
+  echo ""
+  echo "============================================"
+  echo "  ERROR: CLI Failed (exit code $exit_code)"
+  echo "============================================"
+  echo ""
+  echo "Failed during: $phase_name"
+  echo ""
+  
+  # Show the error details
+  if [[ -n "$error_output" ]]; then
+    echo "Error details:"
+    echo "--------------------------------------------"
+    # Try to extract error message from JSON, otherwise show raw output
+    local error_msg
+    error_msg=$(echo "$error_output" | jq -r '.error.message // empty' 2>/dev/null)
+    local error_type
+    error_type=$(echo "$error_output" | jq -r '.error.type // empty' 2>/dev/null)
+    
+    if [[ -n "$error_msg" ]]; then
+      echo "  Type: $error_type"
+      echo "  Message: $error_msg"
+    else
+      # Not JSON or no error field - show last 10 lines of output
+      echo "$error_output" | tail -20
+    fi
+    echo "--------------------------------------------"
+    echo ""
+  fi
+  
+  # Check for uncommitted changes
+  if git diff-index --quiet HEAD -- 2>/dev/null; then
+    echo "No uncommitted changes to clean up."
+    echo ""
+    echo "You can resume this implementation later by running:"
+    echo "  $0 $SPEC_FOLDER"
+    echo ""
+    echo "The script will automatically retry this step."
+    return
+  fi
+  
+  echo "You have uncommitted changes from this step."
+  echo ""
+  echo "Options:"
+  echo "  1) Discard uncommitted changes (recommended - clean retry)"
+  echo "  2) Keep uncommitted changes (may have partial work)"
+  echo ""
+  read -p "Choose option (1/2) [1]: " RECOVERY_CHOICE
+  RECOVERY_CHOICE=${RECOVERY_CHOICE:-1}
+  
+  if [[ "$RECOVERY_CHOICE" == "1" ]]; then
+    echo ""
+    echo "Discarding uncommitted changes..."
+    git checkout -- .
+    git clean -fd
+    echo "Uncommitted changes discarded."
+  else
+    echo ""
+    echo "Keeping uncommitted changes."
+    echo "Note: The partial changes may cause issues on retry."
+  fi
+  
+  echo ""
+  echo "You can resume this implementation later by running:"
+  echo "  $0 $SPEC_FOLDER"
+  echo ""
+  echo "The script will automatically retry this step."
+}
+
 # Detect which phases have been completed
 detect_completed_steps() {
   local completed_phase=0
@@ -361,8 +435,10 @@ run_cli_with_tracking() {
       json_output=$($CLI_CMD --output-format json "$prompt" 2>&1) || exit_code=$?
     fi
     
+    # Handle any CLI errors
     if [[ $exit_code -ne 0 ]]; then
-      echo "Warning: CLI command exited with code $exit_code"
+      handle_cli_error "$exit_code" "$phase_name" "$json_output"
+      exit 1
     fi
     
     # Parse and display usage
@@ -375,8 +451,16 @@ run_cli_with_tracking() {
       echo "$result_text"
     fi
   else
-    # Interactive mode: run normally without JSON capture
-    $CLI_CMD "$prompt"
+    # Interactive mode: run normally, output streams directly to terminal
+    local exit_code=0
+    $CLI_CMD "$prompt" || exit_code=$?
+    
+    # Handle any CLI errors
+    if [[ $exit_code -ne 0 ]]; then
+      handle_cli_error "$exit_code" "$phase_name" "(see output above)"
+      exit 1
+    fi
+    
     echo ""
     echo "  (Token tracking not available in interactive mode)"
     echo ""
