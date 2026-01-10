@@ -28,6 +28,53 @@ if [ -z "$SPEC_INPUT" ]; then
   exit 1
 fi
 
+# === HELPER FUNCTIONS ===
+
+# Commit a step (only if USE_BRANCH=true)
+commit_step() {
+  local prefix="$1"
+  local message="$2"
+  
+  # Only commit if using git branching
+  if [ "$USE_BRANCH" != true ]; then
+    return 0
+  fi
+  
+  # Check if there are changes to commit
+  if git diff-index --quiet HEAD -- 2>/dev/null; then
+    echo "  (No changes to commit)"
+    return 0
+  fi
+  
+  echo "  Committing: $prefix: $message"
+  git add -A
+  git commit -m "$prefix: $message" --no-verify
+  echo ""
+}
+
+# Detect which phases have been completed
+detect_completed_steps() {
+  local completed_phase=0
+  
+  # Phase 1: spec.md exists
+  if [ -f "$SPEC_PATH/spec.md" ]; then
+    completed_phase=1
+  fi
+  
+  # Phase 2: tasks.md exists
+  if [ -f "$SPEC_PATH/tasks.md" ]; then
+    completed_phase=2
+  fi
+  
+  # Phase 3: prompts directory exists and has files
+  if [ -d "$PROMPTS_DIR" ] && [ -n "$(ls -A "$PROMPTS_DIR"/*.md 2>/dev/null)" ]; then
+    completed_phase=3
+  fi
+  
+  # Return the next phase to start (completed + 1)
+  echo $((completed_phase + 1))
+}
+
 # Handle both full paths and just folder names
 if [[ "$SPEC_INPUT" == *"agent-os/specs/"* ]]; then
   # Extract just the folder name from the path
@@ -88,6 +135,31 @@ if ! git diff-index --quiet HEAD -- 2>/dev/null; then
   echo "Or commit them:"
   echo "  git add -A && git commit -m 'WIP'"
   exit 1
+fi
+
+# === DETECT PREVIOUS PROGRESS ===
+START_PHASE=$(detect_completed_steps)
+
+if [[ $START_PHASE -gt 1 ]]; then
+  echo ""
+  echo "============================================"
+  echo "  DETECTED PREVIOUS PROGRESS"
+  echo "============================================"
+  echo ""
+  
+  if [[ $START_PHASE -gt 1 ]]; then
+    echo "✓ Phase 1: Specification written"
+  fi
+  if [[ $START_PHASE -gt 2 ]]; then
+    echo "✓ Phase 2: Tasks created"
+  fi
+  if [[ $START_PHASE -gt 3 ]]; then
+    echo "✓ Phase 3: Prompts generated"
+  fi
+  
+  echo ""
+  echo "Will resume from Phase $START_PHASE"
+  echo ""
 fi
 
 # === READY TO GO ===
@@ -191,32 +263,48 @@ fi
 echo ""
 
 # Ask about branch strategy
-ORIGINAL_BRANCH=$(git branch --show-current)
-echo "Current branch: $ORIGINAL_BRANCH"
+CURRENT_BRANCH=$(git branch --show-current)
+echo "Current branch: $CURRENT_BRANCH"
 echo ""
-read -p "Create a new implementation branch? (y/n) [y]: " CREATE_BRANCH
-CREATE_BRANCH=${CREATE_BRANCH:-y}
 
-if [[ "$CREATE_BRANCH" =~ ^[Yy]$ ]]; then
-  USE_BRANCH=true
-  # Create implementation branch
-  if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
-    echo "Branch $BRANCH_NAME already exists. Switching to it..."
-    git checkout "$BRANCH_NAME"
-  else
-    git checkout -b "$BRANCH_NAME"
-    echo "Created branch: $BRANCH_NAME"
-  fi
+# Check if we're already on the implementation branch
+if [[ "$CURRENT_BRANCH" == "$BRANCH_NAME" ]]; then
+  echo "Already on implementation branch: $BRANCH_NAME"
+  echo "Resuming previous run..."
   echo ""
+  USE_BRANCH=true
+  ORIGINAL_BRANCH=$(git rev-parse --abbrev-ref "$BRANCH_NAME@{u}" 2>/dev/null | cut -d'/' -f1 || echo "main")
+  
   echo "To revert everything later:"
   echo "  git checkout $ORIGINAL_BRANCH && git branch -D $BRANCH_NAME"
   echo ""
 else
-  USE_BRANCH=false
-  echo ""
-  echo "Running on current branch: $ORIGINAL_BRANCH"
-  echo "Warning: Changes will be made directly to this branch."
-  echo ""
+  ORIGINAL_BRANCH="$CURRENT_BRANCH"
+  
+  read -p "Create a new implementation branch? (y/n) [y]: " CREATE_BRANCH
+  CREATE_BRANCH=${CREATE_BRANCH:-y}
+
+  if [[ "$CREATE_BRANCH" =~ ^[Yy]$ ]]; then
+    USE_BRANCH=true
+    # Create implementation branch
+    if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
+      echo "Branch $BRANCH_NAME already exists. Switching to it..."
+      git checkout "$BRANCH_NAME"
+    else
+      git checkout -b "$BRANCH_NAME"
+      echo "Created branch: $BRANCH_NAME"
+    fi
+    echo ""
+    echo "To revert everything later:"
+    echo "  git checkout $ORIGINAL_BRANCH && git branch -D $BRANCH_NAME"
+    echo ""
+  else
+    USE_BRANCH=false
+    echo ""
+    echo "Running on current branch: $ORIGINAL_BRANCH"
+    echo "Warning: Changes will be made directly to this branch."
+    echo ""
+  fi
 fi
 
 # === TOKEN USAGE TRACKING ===
@@ -400,32 +488,67 @@ display_final_summary() {
 }
 
 # === Phase 1: Write Spec ===
-echo "============================================"
-echo "  PHASE 1: Writing Specification"
-echo "============================================"
-echo ""
-echo "Running /write-spec..."
-echo ""
+if [[ $START_PHASE -le 1 ]]; then
+  echo "============================================"
+  echo "  PHASE 1: Writing Specification"
+  echo "============================================"
+  echo ""
+  echo "Running /write-spec..."
+  echo ""
 
-run_cli_with_tracking "PHASE 1: Write Spec" "Run /write-spec for $SPEC_PATH. Complete it fully without stopping for intermediate confirmation messages. When the spec.md is written, you're done."
+  run_cli_with_tracking "PHASE 1: Write Spec" "Run /write-spec for $SPEC_PATH. Complete it fully without stopping for intermediate confirmation messages. When the spec.md is written, you're done."
+  
+  commit_step "chore" "write specification for $SPEC_FOLDER"
+else
+  echo "============================================"
+  echo "  PHASE 1: Writing Specification [SKIPPED]"
+  echo "============================================"
+  echo ""
+  echo "Specification already exists at $SPEC_PATH/spec.md"
+  echo ""
+fi
 
 # === Phase 2: Create Tasks ===
-echo ""
-echo "============================================"
-echo "  PHASE 2: Creating Tasks"
-echo "============================================"
-echo ""
+if [[ $START_PHASE -le 2 ]]; then
+  echo ""
+  echo "============================================"
+  echo "  PHASE 2: Creating Tasks"
+  echo "============================================"
+  echo ""
 
-run_cli_with_tracking "PHASE 2: Create Tasks" "Run /create-tasks for $SPEC_PATH. Complete it fully without stopping for intermediate confirmation messages. When tasks.md is written, you're done."
+  run_cli_with_tracking "PHASE 2: Create Tasks" "Run /create-tasks for $SPEC_PATH. Complete it fully without stopping for intermediate confirmation messages. When tasks.md is written, you're done."
+  
+  commit_step "chore" "create tasks list for $SPEC_FOLDER"
+else
+  echo ""
+  echo "============================================"
+  echo "  PHASE 2: Creating Tasks [SKIPPED]"
+  echo "============================================"
+  echo ""
+  echo "Tasks already exist at $SPEC_PATH/tasks.md"
+  echo ""
+fi
 
 # === Phase 3: Generate Prompts ===
-echo ""
-echo "============================================"
-echo "  PHASE 3: Generating Prompts"
-echo "============================================"
-echo ""
+if [[ $START_PHASE -le 3 ]]; then
+  echo ""
+  echo "============================================"
+  echo "  PHASE 3: Generating Prompts"
+  echo "============================================"
+  echo ""
 
-run_cli_with_tracking "PHASE 3: Generate Prompts" "Run /orchestrate-tasks for $SPEC_PATH. Generate the prompt files to implementation/prompts/. When the prompt files are created, you're done."
+  run_cli_with_tracking "PHASE 3: Generate Prompts" "Run /orchestrate-tasks for $SPEC_PATH. Generate the prompt files to implementation/prompts/. When the prompt files are created, you're done."
+  
+  commit_step "chore" "generate implementation prompts for $SPEC_FOLDER"
+else
+  echo ""
+  echo "============================================"
+  echo "  PHASE 3: Generating Prompts [SKIPPED]"
+  echo "============================================"
+  echo ""
+  echo "Prompts already exist at $PROMPTS_DIR"
+  echo ""
+fi
 
 # === Phase 4: Implement Each Task Group ===
 echo ""
@@ -439,12 +562,33 @@ if [ ! -d "$PROMPTS_DIR" ] || [ -z "$(ls -A "$PROMPTS_DIR" 2>/dev/null)" ]; then
   echo "Warning: No prompt files found in $PROMPTS_DIR"
   echo "Skipping implementation phase."
 else
+  # Track executed prompts
+  EXECUTED_PROMPTS_FILE="$SPEC_PATH/.executed_prompts"
+  
+  # Create the file if it doesn't exist
+  if [ ! -f "$EXECUTED_PROMPTS_FILE" ]; then
+    touch "$EXECUTED_PROMPTS_FILE"
+  fi
+  
   PROMPT_COUNT=$(ls -1 "$PROMPTS_DIR"/*.md 2>/dev/null | wc -l | tr -d ' ')
   CURRENT=0
+  SKIPPED=0
   
   for prompt_file in $(ls -1v "$PROMPTS_DIR"/*.md 2>/dev/null); do
     CURRENT=$((CURRENT + 1))
     PROMPT_NAME=$(basename "$prompt_file")
+    
+    # Check if this prompt has already been executed
+    if grep -Fxq "$PROMPT_NAME" "$EXECUTED_PROMPTS_FILE" 2>/dev/null; then
+      echo ""
+      echo "============================================"
+      echo "  PHASE 4.$CURRENT: $PROMPT_NAME ($CURRENT of $PROMPT_COUNT) [SKIPPED]"
+      echo "============================================"
+      echo ""
+      echo "Prompt already executed, skipping..."
+      SKIPPED=$((SKIPPED + 1))
+      continue
+    fi
     
     echo ""
     echo "============================================"
@@ -453,37 +597,49 @@ else
     echo ""
     
     run_cli_with_tracking "PHASE 4.$CURRENT: $PROMPT_NAME" "Execute the instructions in @$prompt_file fully. Mark completed tasks in $SPEC_PATH/tasks.md when done."
+    
+    # Mark this prompt as executed
+    echo "$PROMPT_NAME" >> "$EXECUTED_PROMPTS_FILE"
+    
+    # Commit this implementation step
+    commit_step "feat" "implement $PROMPT_NAME for $SPEC_FOLDER"
   done
+  
+  if [[ $SKIPPED -gt 0 ]]; then
+    echo ""
+    echo "Skipped $SKIPPED already-executed prompt(s)"
+    echo ""
+  fi
 fi
 
 # === Display Token Usage Summary ===
 display_final_summary
 
-# === Commit and Create PR ===
+# === Finalize and Create PR ===
 echo ""
 echo "============================================"
-echo "  FINALIZING: Commit and PR"
+echo "  FINALIZING: Push and Create PR"
 echo "============================================"
 echo ""
 
-# Check if there are changes to commit
-if git diff-index --quiet HEAD -- 2>/dev/null; then
-  echo "No changes to commit."
-else
-  echo "Committing changes..."
-  git add -A
-  git commit -m "Implement: $SPEC_FOLDER
+# Commit any remaining uncommitted changes (if any)
+if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+  echo "Committing any remaining changes..."
+  commit_step "chore" "finalize implementation for $SPEC_FOLDER"
+fi
 
-Automated implementation via spec-to-implementation script.
-
-Spec: $SPEC_PATH/spec.md
-Tasks: $SPEC_PATH/tasks.md"
+if [ "$USE_BRANCH" = true ]; then
+  echo "Pushing branch..."
+  git push -u origin "$BRANCH_NAME" 2>&1 | grep -v "Everything up-to-date" || true
   
-  if [ "$USE_BRANCH" = true ]; then
+  # Check if PR already exists
+  EXISTING_PR=$(gh pr list --head "$BRANCH_NAME" --json number --jq '.[0].number' 2>/dev/null || echo "")
+  
+  if [ -n "$EXISTING_PR" ]; then
+    PR_URL=$(gh pr view "$EXISTING_PR" --json url --jq '.url')
     echo ""
-    echo "Pushing branch..."
-    git push -u origin "$BRANCH_NAME"
-    
+    echo "PR already exists: $PR_URL"
+  else
     echo ""
     echo "Creating PR..."
     PR_URL=$(gh pr create \
@@ -505,11 +661,12 @@ Automated implementation of \`$SPEC_FOLDER\` spec.
     
     echo ""
     echo "PR created: $PR_URL"
-  else
-    echo ""
-    echo "Changes committed to $ORIGINAL_BRANCH."
-    echo "Push when ready: git push"
   fi
+else
+  echo "Not using git branch, skipping push and PR creation."
+  echo ""
+  echo "Changes are on current branch: $ORIGINAL_BRANCH"
+  echo "Push when ready: git push"
 fi
 
 # === Done ===
@@ -527,15 +684,26 @@ if [ "$USE_BRANCH" = true ]; then
     echo "Review PR: $PR_URL"
   fi
   echo ""
+  echo "Commits created:"
+  echo "  - Each phase was committed with 'chore:' prefix"
+  echo "  - Each implementation was committed with 'feat:' prefix"
+  echo ""
   echo "Next steps:"
   echo "  - Review the PR in GitHub"
   echo "  - If approved: merge the PR"
   echo "  - If rejected: git checkout $ORIGINAL_BRANCH && git branch -D $BRANCH_NAME"
+  echo ""
+  echo "To resume this run later:"
+  echo "  - Run: $0 $SPEC_FOLDER"
+  echo "  - The script will automatically detect and resume from the last step"
 else
-  echo "Changes committed to: $ORIGINAL_BRANCH"
+  echo "Changes made to: $ORIGINAL_BRANCH"
   echo ""
   echo "Next steps:"
-  echo "  - Review the changes: git diff HEAD~1"
+  echo "  - Review the changes: git log --oneline"
   echo "  - Push when ready: git push"
-  echo "  - To undo: git reset --hard HEAD~1"
+  echo ""
+  echo "To resume this run later:"
+  echo "  - Run: $0 $SPEC_FOLDER"
+  echo "  - The script will automatically detect and resume from the last step"
 fi
