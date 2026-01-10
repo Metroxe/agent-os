@@ -415,7 +415,7 @@ format_duration() {
   fi
 }
 
-# Run CLI command and capture JSON output (for automated mode only)
+# Run CLI command with streaming output and token tracking
 run_cli_with_tracking() {
   local phase_name="$1"
   local prompt="$2"
@@ -423,32 +423,68 @@ run_cli_with_tracking() {
   STEP_COUNT=$((STEP_COUNT + 1))
   
   if [[ "$EXEC_MODE" == "1" ]]; then
-    # Automated mode: capture JSON output
-    local json_output
+    # Automated mode: use stream-json for real-time output + token tracking
+    local temp_output
+    temp_output=$(mktemp)
     local exit_code=0
     
+    # Run CLI with stream-json, capture all output while streaming to display script
     if [[ "$CLI_TOOL" == "2" ]]; then
       # Cursor CLI
-      json_output=$($CLI_CMD --output-format json "$prompt" 2>&1) || exit_code=$?
+      $CLI_CMD --output-format stream-json "$prompt" 2>&1 | tee "$temp_output" | while IFS= read -r line; do
+        # Extract and display assistant text content
+        local msg_type content
+        msg_type=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
+        if [[ "$msg_type" == "assistant" ]]; then
+          content=$(echo "$line" | jq -r '.message.content[]?.text // empty' 2>/dev/null)
+          [[ -n "$content" ]] && echo "$content"
+        elif [[ "$msg_type" == "user" ]]; then
+          # Show tool use results briefly
+          content=$(echo "$line" | jq -r '.message.content[]?.type // empty' 2>/dev/null)
+          [[ "$content" == "tool_result" ]] && echo "  [tool completed]"
+        fi
+      done
+      exit_code=${PIPESTATUS[0]}
     else
       # Claude Code
-      json_output=$($CLI_CMD --output-format json "$prompt" 2>&1) || exit_code=$?
+      $CLI_CMD --output-format stream-json "$prompt" 2>&1 | tee "$temp_output" | while IFS= read -r line; do
+        # Extract and display assistant text content
+        local msg_type content
+        msg_type=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
+        if [[ "$msg_type" == "assistant" ]]; then
+          content=$(echo "$line" | jq -r '.message.content[]?.text // empty' 2>/dev/null)
+          [[ -n "$content" ]] && echo "$content"
+        elif [[ "$msg_type" == "user" ]]; then
+          # Show tool use results briefly
+          content=$(echo "$line" | jq -r '.message.content[]?.type // empty' 2>/dev/null)
+          [[ "$content" == "tool_result" ]] && echo "  [tool completed]"
+        fi
+      done
+      exit_code=${PIPESTATUS[0]}
+    fi
+    
+    # Read captured output and find the result event
+    local result_json=""
+    local last_error=""
+    if [[ -f "$temp_output" ]]; then
+      result_json=$(grep '"type":"result"' "$temp_output" 2>/dev/null | tail -1 || true)
+      last_error=$(grep -i '"error"' "$temp_output" 2>/dev/null | tail -1 || true)
+      rm -f "$temp_output"
     fi
     
     # Handle any CLI errors
     if [[ $exit_code -ne 0 ]]; then
-      handle_cli_error "$exit_code" "$phase_name" "$json_output"
+      handle_cli_error "$exit_code" "$phase_name" "$last_error"
       exit 1
     fi
     
-    # Parse and display usage
-    parse_and_display_usage "$phase_name" "$json_output"
-    
-    # Print the result text if available
-    local result_text
-    result_text=$(echo "$json_output" | jq -r '.result // empty' 2>/dev/null)
-    if [[ -n "$result_text" ]]; then
-      echo "$result_text"
+    # Parse and display usage from result event
+    if [[ -n "$result_json" ]]; then
+      parse_and_display_usage "$phase_name" "$result_json"
+    else
+      echo ""
+      echo "  (Token usage data not available)"
+      echo ""
     fi
   else
     # Interactive mode: run normally, output streams directly to terminal
@@ -468,13 +504,17 @@ run_cli_with_tracking() {
 }
 
 # Parse usage from JSON and display summary
+# Handles both regular JSON output and stream-json result events
 parse_and_display_usage() {
   local phase_name="$1"
   local json="$2"
   
-  # Extract common fields
+  # Extract common fields (default to 0 if empty/missing)
+  # Check both top-level and nested .result paths for stream-json compatibility
   local duration_ms
-  duration_ms=$(echo "$json" | jq -r '.duration_ms // .duration_api_ms // 0' 2>/dev/null)
+  duration_ms=$(echo "$json" | jq -r '.duration_ms // .duration_api_ms // .result.duration_ms // 0' 2>/dev/null)
+  duration_ms=${duration_ms:-0}
+  [[ "$duration_ms" =~ ^[0-9]+$ ]] || duration_ms=0
   TOTAL_DURATION_MS=$((TOTAL_DURATION_MS + duration_ms))
   
   echo ""
@@ -492,13 +532,21 @@ parse_and_display_usage() {
     echo "  (Token usage not available with Cursor CLI)"
   else
     # Claude Code - full usage data available
+    # Check both top-level and nested .result paths for stream-json compatibility
     local input_tokens output_tokens cache_read cache_creation cost_usd
     
-    input_tokens=$(echo "$json" | jq -r '.usage.input_tokens // 0' 2>/dev/null)
-    output_tokens=$(echo "$json" | jq -r '.usage.output_tokens // 0' 2>/dev/null)
-    cache_read=$(echo "$json" | jq -r '.usage.cache_read_input_tokens // 0' 2>/dev/null)
-    cache_creation=$(echo "$json" | jq -r '.usage.cache_creation_input_tokens // 0' 2>/dev/null)
-    cost_usd=$(echo "$json" | jq -r '.total_cost_usd // 0' 2>/dev/null)
+    input_tokens=$(echo "$json" | jq -r '.usage.input_tokens // .result.usage.input_tokens // 0' 2>/dev/null)
+    output_tokens=$(echo "$json" | jq -r '.usage.output_tokens // .result.usage.output_tokens // 0' 2>/dev/null)
+    cache_read=$(echo "$json" | jq -r '.usage.cache_read_input_tokens // .result.usage.cache_read_input_tokens // 0' 2>/dev/null)
+    cache_creation=$(echo "$json" | jq -r '.usage.cache_creation_input_tokens // .result.usage.cache_creation_input_tokens // 0' 2>/dev/null)
+    cost_usd=$(echo "$json" | jq -r '.total_cost_usd // .result.total_cost_usd // 0' 2>/dev/null)
+    
+    # Ensure numeric values (default to 0 if empty/invalid)
+    input_tokens=${input_tokens:-0}; [[ "$input_tokens" =~ ^[0-9]+$ ]] || input_tokens=0
+    output_tokens=${output_tokens:-0}; [[ "$output_tokens" =~ ^[0-9]+$ ]] || output_tokens=0
+    cache_read=${cache_read:-0}; [[ "$cache_read" =~ ^[0-9]+$ ]] || cache_read=0
+    cache_creation=${cache_creation:-0}; [[ "$cache_creation" =~ ^[0-9]+$ ]] || cache_creation=0
+    cost_usd=${cost_usd:-0}; [[ "$cost_usd" =~ ^[0-9.]+$ ]] || cost_usd=0
     
     # Accumulate totals
     TOTAL_INPUT_TOKENS=$((TOTAL_INPUT_TOKENS + input_tokens))
