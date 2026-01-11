@@ -67,9 +67,9 @@ handle_cli_error() {
   echo ""
   
   # Show the error details
+  echo "Error details:"
+  echo "--------------------------------------------"
   if [[ -n "$error_output" ]]; then
-    echo "Error details:"
-    echo "--------------------------------------------"
     # Try to extract error message from JSON, otherwise show raw output
     local error_msg
     error_msg=$(echo "$error_output" | jq -r '.error.message // empty' 2>/dev/null)
@@ -80,12 +80,17 @@ handle_cli_error() {
       echo "  Type: $error_type"
       echo "  Message: $error_msg"
     else
-      # Not JSON or no error field - show last 10 lines of output
-      echo "$error_output" | tail -20
+      # Not JSON or no error field - show the output
+      echo "$error_output"
     fi
-    echo "--------------------------------------------"
+  else
+    echo "  (No error output captured - CLI may have failed before producing output)"
     echo ""
+    echo "  Try running the CLI command manually to see the error:"
+    echo "  claude -p \"your prompt here\""
   fi
+  echo "--------------------------------------------"
+  echo ""
   
   # Check for uncommitted changes
   if git diff-index --quiet HEAD -- 2>/dev/null; then
@@ -423,69 +428,30 @@ run_cli_with_tracking() {
   STEP_COUNT=$((STEP_COUNT + 1))
   
   if [[ "$EXEC_MODE" == "1" ]]; then
-    # Automated mode: use stream-json for real-time output + token tracking
-    local temp_output
-    temp_output=$(mktemp)
+    # Automated mode: capture output for token tracking, display text output
     local exit_code=0
+    local cli_output=""
     
-    # Run CLI with stream-json, capture all output while streaming to display script
-    if [[ "$CLI_TOOL" == "2" ]]; then
-      # Cursor CLI
-      $CLI_CMD --output-format stream-json "$prompt" 2>&1 | tee "$temp_output" | while IFS= read -r line; do
-        # Extract and display assistant text content
-        local msg_type content
-        msg_type=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
-        if [[ "$msg_type" == "assistant" ]]; then
-          content=$(echo "$line" | jq -r '.message.content[]?.text // empty' 2>/dev/null)
-          [[ -n "$content" ]] && echo "$content"
-        elif [[ "$msg_type" == "user" ]]; then
-          # Show tool use results briefly
-          content=$(echo "$line" | jq -r '.message.content[]?.type // empty' 2>/dev/null)
-          [[ "$content" == "tool_result" ]] && echo "  [tool completed]"
-        fi
-      done
-      exit_code=${PIPESTATUS[0]}
-    else
-      # Claude Code
-      $CLI_CMD --output-format stream-json "$prompt" 2>&1 | tee "$temp_output" | while IFS= read -r line; do
-        # Extract and display assistant text content
-        local msg_type content
-        msg_type=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
-        if [[ "$msg_type" == "assistant" ]]; then
-          content=$(echo "$line" | jq -r '.message.content[]?.text // empty' 2>/dev/null)
-          [[ -n "$content" ]] && echo "$content"
-        elif [[ "$msg_type" == "user" ]]; then
-          # Show tool use results briefly
-          content=$(echo "$line" | jq -r '.message.content[]?.type // empty' 2>/dev/null)
-          [[ "$content" == "tool_result" ]] && echo "  [tool completed]"
-        fi
-      done
-      exit_code=${PIPESTATUS[0]}
-    fi
+    # Show what we're running
+    echo "  Command: $CLI_CMD \"<prompt>...\""
+    echo ""
     
-    # Read captured output and find the result event
-    local result_json=""
-    local last_error=""
-    if [[ -f "$temp_output" ]]; then
-      result_json=$(grep '"type":"result"' "$temp_output" 2>/dev/null | tail -1 || true)
-      last_error=$(grep -i '"error"' "$temp_output" 2>/dev/null | tail -1 || true)
-      rm -f "$temp_output"
-    fi
+    # Run CLI without JSON format first - just show the text output directly
+    # This ensures we see Claude working in real-time
+    set +e
+    $CLI_CMD "$prompt"
+    exit_code=$?
+    set -e
     
     # Handle any CLI errors
     if [[ $exit_code -ne 0 ]]; then
-      handle_cli_error "$exit_code" "$phase_name" "$last_error"
+      handle_cli_error "$exit_code" "$phase_name" "(see output above)"
       exit 1
     fi
     
-    # Parse and display usage from result event
-    if [[ -n "$result_json" ]]; then
-      parse_and_display_usage "$phase_name" "$result_json"
-    else
-      echo ""
-      echo "  (Token usage data not available)"
-      echo ""
-    fi
+    echo ""
+    echo "  (Token tracking requires --output-format json, skipped for real-time display)"
+    echo ""
   else
     # Interactive mode: run normally, output streams directly to terminal
     local exit_code=0
