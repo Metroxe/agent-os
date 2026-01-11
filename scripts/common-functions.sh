@@ -437,7 +437,7 @@ get_profile_files() {
         fi
 
         if [[ -d "$search_dir" ]]; then
-            find "$search_dir" -type f \( -name "*.md" -o -name "*.yml" -o -name "*.yaml" -o -name "*.sh" \) 2>/dev/null | while read file; do
+            find "$search_dir" -type f \( -name "*.md" -o -name "*.yml" -o -name "*.yaml" -o -name "*.sh" -o -name "*.ts" -o -name "*.mts" -o -name "*.js" -o -name "*.mjs" \) 2>/dev/null | while read file; do
                 relative_path="${file#$profile_dir/}"
 
                 # Check if excluded

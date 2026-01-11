@@ -3,6 +3,8 @@
 ## Commands
 
 ```
+npx zx spec-to-implementation.ts <spec-folder-name>
+
 ~/agent-os/scripts/project-update.sh --profile nodejs --agent-os-commands true --claude-code-commands true --standards_as_claude_code_skills true --use_claude_code_subagents false
 ```
 
