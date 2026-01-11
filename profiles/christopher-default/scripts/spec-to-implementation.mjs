@@ -1,52 +1,31 @@
-#!/usr/bin/env npx zx
-// @ts-nocheck
+#!/usr/bin/env zx
 /**
- * spec-to-implementation.ts
+ * spec-to-implementation.mjs
  *
  * One-shot script to take a shaped spec through to implementation with PR.
- * Usage: npx zx spec-to-implementation.ts <spec-folder-name>
+ *
+ * Usage:
+ *   zx spec-to-implementation.mjs <spec-folder-name>
  *
  * Prerequisites:
  *   - Run /shape-spec first to create the spec folder with requirements
  *   - gh CLI installed and authenticated (gh auth login)
- *   - zx installed: npm install -g zx
+ *   - zx: npm install -g zx
  */
 
-import "zx/globals";
+// zx automatically injects globals ($, fs, path, chalk, question, glob, etc.)
+// No import needed when running with `zx` command
 
 // Enable verbose mode for debugging if needed
 $.verbose = false;
 
 // === CONFIGURATION ===
 
-interface TokenUsage {
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  totalCacheReadTokens: number;
-  totalCacheCreationTokens: number;
-  totalCostUsd: number;
-  totalDurationMs: number;
-  stepCount: number;
-}
-
-interface CliConfig {
-  tool: "claude" | "cursor";
-  modelFlag: string;
-  execMode: "automated" | "interactive";
-  command: string;
-}
-
-interface BranchConfig {
-  useBranch: boolean;
-  branchName: string;
-  originalBranch: string;
-}
-
 // Global state
-let specFolder: string;
-let specPath: string;
-let promptsDir: string;
-let tokenUsage: TokenUsage = {
+let specFolder;
+let specPath;
+let promptsDir;
+let tokenUsage = {
   totalInputTokens: 0,
   totalOutputTokens: 0,
   totalCacheReadTokens: 0,
@@ -55,29 +34,29 @@ let tokenUsage: TokenUsage = {
   totalDurationMs: 0,
   stepCount: 0,
 };
-let cliConfig: CliConfig;
-let branchConfig: BranchConfig;
+let cliConfig;
+let branchConfig;
 
 // === HELPER FUNCTIONS ===
 
 /**
  * Format number with commas for display
  */
-function formatNumber(num: number): string {
+function formatNumber(num) {
   return num.toLocaleString("en-US");
 }
 
 /**
  * Format cost as USD
  */
-function formatCost(cost: number): string {
+function formatCost(cost) {
   return `$${cost.toFixed(4)}`;
 }
 
 /**
  * Format duration from ms to human readable
  */
-function formatDuration(ms: number): string {
+function formatDuration(ms) {
   const seconds = Math.floor(ms / 1000);
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
@@ -91,7 +70,7 @@ function formatDuration(ms: number): string {
 /**
  * Commit a step (only if useBranch is true)
  */
-async function commitStep(prefix: string, message: string): Promise<void> {
+async function commitStep(prefix, message) {
   if (!branchConfig.useBranch) {
     return;
   }
@@ -114,11 +93,7 @@ async function commitStep(prefix: string, message: string): Promise<void> {
 /**
  * Handle CLI errors with recovery options
  */
-async function handleCliError(
-  exitCode: number,
-  phaseName: string,
-  errorOutput: string
-): Promise<void> {
+async function handleCliError(exitCode, phaseName, errorOutput) {
   console.log("");
   console.log("============================================");
   console.log("  ERROR: CLI Failed (exit code " + exitCode + ")");
@@ -163,7 +138,7 @@ async function handleCliError(
     console.log("No uncommitted changes to clean up.");
     console.log("");
     console.log("You can resume this implementation later by running:");
-    console.log(`  npx zx spec-to-implementation.ts ${specFolder}`);
+    console.log(`  ./spec-to-implementation.mjs ${specFolder}`);
     console.log("");
     console.log("The script will automatically retry this step.");
     return;
@@ -194,7 +169,7 @@ async function handleCliError(
 
   console.log("");
   console.log("You can resume this implementation later by running:");
-  console.log(`  npx zx spec-to-implementation.ts ${specFolder}`);
+  console.log(`  ./spec-to-implementation.mjs ${specFolder}`);
   console.log("");
   console.log("The script will automatically retry this step.");
 }
@@ -202,7 +177,7 @@ async function handleCliError(
 /**
  * Detect which phases have been completed
  */
-async function detectCompletedSteps(): Promise<number> {
+async function detectCompletedSteps() {
   let completedPhase = 0;
 
   // Phase 1: spec.md exists
@@ -230,10 +205,7 @@ async function detectCompletedSteps(): Promise<number> {
 /**
  * Run CLI command with streaming output and token tracking
  */
-async function runCliWithTracking(
-  phaseName: string,
-  prompt: string
-): Promise<void> {
+async function runCliWithTracking(phaseName, prompt) {
   tokenUsage.stepCount++;
 
   // Save current stdio setting and set to inherit for real-time streaming
@@ -259,7 +231,7 @@ async function runCliWithTracking(
           : [];
         await $`claude --dangerously-skip-permissions -p ${modelArgs} ${prompt}`;
       }
-    } catch (error: any) {
+    } catch (error) {
       $.stdio = previousStdio;
       await handleCliError(error.exitCode || 1, phaseName, error.stderr || "");
       process.exit(1);
@@ -287,7 +259,7 @@ async function runCliWithTracking(
           : [];
         await $`claude ${modelArgs} ${prompt}`;
       }
-    } catch (error: any) {
+    } catch (error) {
       $.stdio = previousStdio;
       await handleCliError(error.exitCode || 1, phaseName, error.stderr || "");
       process.exit(1);
@@ -303,7 +275,7 @@ async function runCliWithTracking(
 /**
  * Display final usage summary
  */
-function displayFinalSummary(): void {
+function displayFinalSummary() {
   console.log("");
   console.log("============================================");
   console.log("  TOKEN USAGE SUMMARY");
@@ -356,18 +328,18 @@ function displayFinalSummary(): void {
 
 // === MAIN SCRIPT ===
 
-async function main(): Promise<void> {
+async function main() {
   // Parse arguments
   const specInput = process.argv[3] || "";
 
   if (!specInput) {
-    console.log("Usage: npx zx spec-to-implementation.ts <spec-folder-name>");
+    console.log("Usage: ./spec-to-implementation.mjs <spec-folder-name>");
     console.log("");
     console.log(
-      "Example: npx zx spec-to-implementation.ts 2026-01-08-my-feature"
+      "Example: ./spec-to-implementation.mjs 2026-01-08-my-feature"
     );
     console.log(
-      "     or: npx zx spec-to-implementation.ts ./agent-os/specs/2026-01-08-my-feature"
+      "     or: ./spec-to-implementation.mjs ./agent-os/specs/2026-01-08-my-feature"
     );
     console.log("");
     console.log("This script will:");
@@ -494,7 +466,7 @@ async function main(): Promise<void> {
     console.log("  1) Default (use CLI default)");
 
     // Fetch available models dynamically
-    let models: string[] = [];
+    let models = [];
     try {
       const modelsOutput = await $`agent models`.quiet();
       const lines = modelsOutput.stdout.split("\n");
@@ -930,7 +902,7 @@ Automated implementation of \`${specFolder}\` spec.
     );
     console.log("");
     console.log("To resume this run later:");
-    console.log(`  - Run: npx zx spec-to-implementation.ts ${specFolder}`);
+    console.log(`  - Run: ./spec-to-implementation.mjs ${specFolder}`);
     console.log(
       "  - The script will automatically detect and resume from the last step"
     );
@@ -942,7 +914,7 @@ Automated implementation of \`${specFolder}\` spec.
     console.log("  - Push when ready: git push");
     console.log("");
     console.log("To resume this run later:");
-    console.log(`  - Run: npx zx spec-to-implementation.ts ${specFolder}`);
+    console.log(`  - Run: ./spec-to-implementation.mjs ${specFolder}`);
     console.log(
       "  - The script will automatically detect and resume from the last step"
     );
