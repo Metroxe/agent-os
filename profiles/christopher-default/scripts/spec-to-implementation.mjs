@@ -206,8 +206,9 @@ async function detectCompletedSteps() {
  */
 function formatToolUse(toolName, toolInput) {
   try {
-    const input = typeof toolInput === "string" ? JSON.parse(toolInput) : toolInput;
-    
+    const input =
+      typeof toolInput === "string" ? JSON.parse(toolInput) : toolInput;
+
     switch (toolName) {
       case "Read":
         return `Reading ${input.file_path || input.path || "file"}`;
@@ -220,7 +221,9 @@ function formatToolUse(toolName, toolInput) {
       case "Search":
         const pattern = input.pattern || input.query || "";
         const searchPath = input.path || input.directory || ".";
-        return `Searching "${pattern.substring(0, 40)}${pattern.length > 40 ? "..." : ""}" in ${searchPath}`;
+        return `Searching "${pattern.substring(0, 40)}${
+          pattern.length > 40 ? "..." : ""
+        }" in ${searchPath}`;
       case "Glob":
         return `Finding files: ${input.pattern || input.glob_pattern || "*"}`;
       case "LS":
@@ -229,7 +232,9 @@ function formatToolUse(toolName, toolInput) {
       case "Bash":
       case "Shell":
         const cmd = input.command || "";
-        return `Running: ${cmd.substring(0, 50)}${cmd.length > 50 ? "..." : ""}`;
+        return `Running: ${cmd.substring(0, 50)}${
+          cmd.length > 50 ? "..." : ""
+        }`;
       case "WebSearch":
         return `Searching web: ${input.query || input.search_term || ""}`;
       case "TodoRead":
@@ -243,13 +248,34 @@ function formatToolUse(toolName, toolInput) {
         const firstKey = Object.keys(input)[0];
         if (firstKey && typeof input[firstKey] === "string") {
           const val = input[firstKey];
-          return `${toolName}: ${val.substring(0, 40)}${val.length > 40 ? "..." : ""}`;
+          return `${toolName}: ${val.substring(0, 40)}${
+            val.length > 40 ? "..." : ""
+          }`;
         }
         return toolName;
     }
   } catch {
     return toolName;
   }
+}
+
+/**
+ * Format tool result for display (truncate if too long)
+ */
+function formatToolResult(content, maxLines = 5) {
+  if (!content) return "";
+  
+  const str = typeof content === "string" ? content : JSON.stringify(content, null, 2);
+  const lines = str.split("\n");
+  
+  if (lines.length <= maxLines) {
+    return lines.map(l => chalk.dim(`    │ ${l}`)).join("\n");
+  }
+  
+  const shown = lines.slice(0, maxLines);
+  const remaining = lines.length - maxLines;
+  return shown.map(l => chalk.dim(`    │ ${l}`)).join("\n") + 
+    chalk.dim(`\n    │ ... (${remaining} more lines)`);
 }
 
 /**
@@ -261,6 +287,7 @@ function runCommandWithStreaming(cmd, args) {
     let jsonLines = [];
     // Track blocks by index
     let blocks = {}; // { index: { type, name, input } }
+    let lastToolName = ""; // Track last tool for result display
 
     const proc = spawn(cmd, args, {
       stdio: ["inherit", "pipe", "pipe"],
@@ -288,6 +315,25 @@ function runCommandWithStreaming(cmd, args) {
                 // Tool use in final message
                 const toolDisplay = formatToolUse(block.name, block.input);
                 console.log(chalk.cyan(`  ➤ ${toolDisplay}`));
+                lastToolName = block.name;
+              } else if (block.type === "tool_result") {
+                // Tool result in final message
+                if (block.content) {
+                  console.log(formatToolResult(block.content));
+                }
+              }
+            }
+          }
+        } else if (event.type === "user") {
+          // User message - often contains tool results
+          if (event.message?.content) {
+            for (const block of event.message.content) {
+              if (block.type === "tool_result") {
+                // Show tool result with preview
+                const resultPreview = formatToolResult(block.content);
+                if (resultPreview) {
+                  console.log(resultPreview);
+                }
               }
             }
           }
@@ -302,6 +348,8 @@ function runCommandWithStreaming(cmd, args) {
             };
           } else if (event.content_block?.type === "text") {
             blocks[idx] = { type: "text", content: "" };
+          } else if (event.content_block?.type === "tool_result") {
+            blocks[idx] = { type: "tool_result", content: "" };
           }
         } else if (event.type === "content_block_delta") {
           const idx = event.index;
@@ -310,12 +358,17 @@ function runCommandWithStreaming(cmd, args) {
             process.stdout.write(event.delta.text);
             output += event.delta.text;
             if (blocks[idx]) {
-              blocks[idx].content = (blocks[idx].content || "") + event.delta.text;
+              blocks[idx].content =
+                (blocks[idx].content || "") + event.delta.text;
             }
-          } else if (event.delta?.type === "input_json_delta" && event.delta?.partial_json) {
+          } else if (
+            event.delta?.type === "input_json_delta" &&
+            event.delta?.partial_json
+          ) {
             // Accumulate tool input JSON
             if (blocks[idx]) {
-              blocks[idx].input = (blocks[idx].input || "") + event.delta.partial_json;
+              blocks[idx].input =
+                (blocks[idx].input || "") + event.delta.partial_json;
             }
           }
         } else if (event.type === "content_block_stop") {
@@ -326,6 +379,13 @@ function runCommandWithStreaming(cmd, args) {
             // Show what tool was used with its input
             const toolDisplay = formatToolUse(block.name, block.input);
             console.log(chalk.cyan(`  ➤ ${toolDisplay}`));
+            lastToolName = block.name;
+          } else if (block && block.type === "tool_result") {
+            // Show tool result
+            const resultPreview = formatToolResult(block.content);
+            if (resultPreview) {
+              console.log(resultPreview);
+            }
           }
           // Clean up
           delete blocks[idx];
@@ -348,8 +408,8 @@ function runCommandWithStreaming(cmd, args) {
             console.log(
               chalk.dim(
                 `  Step cost: ${formatCost(event.total_cost_usd)} | ` +
-                `${formatNumber(event.usage?.input_tokens || 0)} in / ` +
-                `${formatNumber(event.usage?.output_tokens || 0)} out`
+                  `${formatNumber(event.usage?.input_tokens || 0)} in / ` +
+                  `${formatNumber(event.usage?.output_tokens || 0)} out`
               )
             );
           }
