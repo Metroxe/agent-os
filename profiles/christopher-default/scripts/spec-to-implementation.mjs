@@ -898,16 +898,30 @@ async function main() {
   }
 
   // Check for uncommitted changes
+  let hasUncommittedChanges = false;
   await $`git add -A`.quiet();
   try {
     await $`git diff --cached --quiet`;
     await $`git diff --quiet`;
   } catch {
-    console.log("Error: You have uncommitted changes.");
+    hasUncommittedChanges = true;
+    console.log(chalk.yellow("⚠ Warning: You have uncommitted changes."));
     console.log("");
-    console.log("Please commit or stash them first:");
-    console.log(`  git stash push -m 'before ${specFolder} implementation'`);
-    process.exit(1);
+    console.log("If you proceed and create a new branch, these changes will be");
+    console.log("moved to the new implementation branch.");
+    console.log("");
+    const continueChoice =
+      (await question("Continue anyway? (y/n) [n]: ")) || "n";
+    if (continueChoice.toLowerCase() !== "y") {
+      console.log("");
+      console.log("Aborted. You can:");
+      console.log(`  git stash push -m 'before ${specFolder} implementation'`);
+      console.log("  git commit -am 'WIP'");
+      process.exit(1);
+    }
+    // Reset staging area so changes come with us to new branch
+    await $`git reset HEAD`.quiet();
+    console.log("");
   }
 
   // === DETECT PREVIOUS PROGRESS ===
@@ -1084,15 +1098,25 @@ async function main() {
         log(`Branch ${branchName} already exists. Switching to it...`);
         await $`git checkout ${branchName}`;
       } catch {
+        // IMPORTANT: Always create new branches from main to prevent
+        // accidentally branching from another implementation branch
+        if (currentBranch !== "main") {
+          log(chalk.yellow(`⚠ Currently on '${currentBranch}', switching to 'main' first...`));
+          if (hasUncommittedChanges) {
+            log(chalk.dim("  (Your uncommitted changes will be brought to the new branch)"));
+          }
+          await $`git checkout main`.quiet();
+          await $`git pull --ff-only origin main`.quiet().catch(() => {});
+        }
         await $`git checkout -b ${branchName}`;
-        log(`Created branch: ${branchName}`);
+        log(`Created branch: ${branchName} (from main)`);
       }
 
-      branchConfig = { useBranch: true, branchName, originalBranch };
+      branchConfig = { useBranch: true, branchName, originalBranch: "main" };
 
       log("");
       log("To revert everything later:");
-      log(`  git checkout ${originalBranch} && git branch -D ${branchName}`);
+      log(`  git checkout main && git branch -D ${branchName}`);
       log("");
     } else {
       branchConfig = { useBranch: false, branchName, originalBranch };
@@ -1234,7 +1258,15 @@ async function main() {
     log("Pushing branch...");
     try {
       await $`git push -u origin ${branchConfig.branchName}`;
-    } catch {}
+    } catch {
+      // If normal push fails, try force-with-lease (safe for feature branches)
+      try {
+        log("Normal push failed, trying --force-with-lease...");
+        await $`git push --force-with-lease -u origin ${branchConfig.branchName}`;
+      } catch (e) {
+        log(`Warning: Push failed: ${e.message}`);
+      }
+    }
 
     // Check if PR already exists
     let existingPr = "";
