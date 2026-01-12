@@ -267,44 +267,48 @@ function runCursorCli(config, prompt) {
   return new Promise((resolve, reject) => {
     // Build args array
     const args = [];
-    
+
     if (config.execMode === "automated") {
       args.push("-p", "--force", "--output-format", "stream-json");
     }
-    
+
     // Add model flag if present
     if (config.modelFlag) {
       args.push(...config.modelFlag.split(" "));
     }
-    
+
     // Add the prompt
     args.push(prompt);
-    
-    console.log(chalk.dim(`  $ agent ${args.slice(0, -1).join(" ")} "<prompt>..."`));
+
+    console.log(
+      chalk.dim(`  $ agent ${args.slice(0, -1).join(" ")} "<prompt>..."`)
+    );
     console.log(""); // Add spacing before output
-    
+
     let capturedOutput = "";
     let currentThinking = "";
     let isShowingThinking = false;
-    
+
     const proc = spawn("agent", args, {
       stdio: ["inherit", "pipe", "pipe"],
     });
-    
+
     const rl = createInterface({ input: proc.stdout });
-    
+
     rl.on("line", (line) => {
       try {
         const event = JSON.parse(line);
         capturedOutput += line + "\n";
-        
+
         switch (event.type) {
           case "system":
             if (event.subtype === "init") {
-              console.log(chalk.dim(`  Session: ${event.session_id?.substring(0, 8)}...`));
+              console.log(
+                chalk.dim(`  Session: ${event.session_id?.substring(0, 8)}...`)
+              );
             }
             break;
-            
+
           case "thinking":
             if (event.subtype === "delta" && event.text) {
               if (!isShowingThinking) {
@@ -320,7 +324,7 @@ function runCursorCli(config, prompt) {
               }
             }
             break;
-            
+
           case "tool_call":
             // Tool calls - extract tool name and args/result
             if (event.tool_call) {
@@ -328,8 +332,11 @@ function runCursorCli(config, prompt) {
               for (const key of toolKeys) {
                 const toolData = event.tool_call[key];
                 // Extract tool name from key (e.g., "readToolCall" -> "Read")
-                const toolName = key.replace(/ToolCall$/, "").replace(/([A-Z])/g, " $1").trim();
-                
+                const toolName = key
+                  .replace(/ToolCall$/, "")
+                  .replace(/([A-Z])/g, " $1")
+                  .trim();
+
                 if (event.subtype === "started") {
                   // Show tool starting with args
                   let argsPreview = "";
@@ -343,26 +350,50 @@ function runCursorCli(config, prompt) {
                     } else if (toolData.args.query) {
                       argsPreview = toolData.args.query.substring(0, 60);
                     } else {
-                      argsPreview = JSON.stringify(toolData.args).substring(0, 60);
+                      argsPreview = JSON.stringify(toolData.args).substring(
+                        0,
+                        60
+                      );
                     }
                   }
                   console.log(chalk.cyan(`  ➤ ${toolName}: ${argsPreview}`));
                 } else if (event.subtype === "completed") {
-                  // Show result preview
-                  if (toolData.result?.success?.content) {
-                    const content = toolData.result.success.content;
-                    const preview = typeof content === "string" 
-                      ? content.substring(0, 80).replace(/\n/g, " ")
-                      : JSON.stringify(content).substring(0, 80);
-                    console.log(chalk.dim(`    └─ ${preview}${content.length > 80 ? "..." : ""}`));
+                  // Show result preview - handle different result structures
+                  const success = toolData.result?.success;
+                  if (success) {
+                    // Shell commands have stdout/stderr, others have content
+                    let output = success.content || success.stdout || success.interleavedOutput;
+                    if (output) {
+                      const preview =
+                        typeof output === "string"
+                          ? output.substring(0, 80).replace(/\n/g, " ").trim()
+                          : JSON.stringify(output).substring(0, 80);
+                      if (preview) {
+                        console.log(
+                          chalk.dim(
+                            `    └─ ${preview}${output.length > 80 ? "..." : ""}`
+                          )
+                        );
+                      }
+                    }
+                    // Show exit code for shell commands if non-zero
+                    if (success.exitCode !== undefined && success.exitCode !== 0) {
+                      console.log(chalk.yellow(`    └─ Exit code: ${success.exitCode}`));
+                    }
                   } else if (toolData.result?.error) {
-                    console.log(chalk.red(`    └─ Error: ${toolData.result.error}`));
+                    // Handle error - could be string or object
+                    const errMsg = typeof toolData.result.error === "string"
+                      ? toolData.result.error
+                      : (toolData.result.error.message || toolData.result.error.errorMessage || JSON.stringify(toolData.result.error));
+                    console.log(
+                      chalk.red(`    └─ Error: ${errMsg.substring(0, 80)}`)
+                    );
                   }
                 }
               }
             }
             break;
-            
+
           case "assistant":
             // Final assistant message
             if (event.message?.content) {
@@ -374,12 +405,16 @@ function runCursorCli(config, prompt) {
               }
             }
             break;
-            
+
           case "result":
             // Final result
             if (event.duration_ms) {
               console.log("");
-              console.log(chalk.dim(`  Completed in ${(event.duration_ms / 1000).toFixed(1)}s`));
+              console.log(
+                chalk.dim(
+                  `  Completed in ${(event.duration_ms / 1000).toFixed(1)}s`
+                )
+              );
             }
             break;
         }
@@ -389,13 +424,13 @@ function runCursorCli(config, prompt) {
         capturedOutput += line + "\n";
       }
     });
-    
+
     proc.stderr.on("data", (data) => {
       const text = data.toString();
       capturedOutput += text;
       process.stderr.write(chalk.red(text));
     });
-    
+
     proc.on("close", (code) => {
       console.log(""); // Newline after output
       if (code === 0) {
@@ -407,7 +442,7 @@ function runCursorCli(config, prompt) {
         reject(error);
       }
     });
-    
+
     proc.on("error", (err) => {
       console.error("Failed to start agent:", err.message);
       reject({ output: "", error: err, exitCode: 1 });
@@ -885,7 +920,12 @@ async function main() {
       const modelsOutput = await $`agent models`.quiet();
       const lines = modelsOutput.stdout.split("\n");
       for (const line of lines) {
-        if (!line || line.includes("Available") || line.includes("---") || line.includes("Tip:"))
+        if (
+          !line ||
+          line.includes("Available") ||
+          line.includes("---") ||
+          line.includes("Tip:")
+        )
           continue;
         // Extract just the model ID (before the " - " separator)
         // Lines look like: "  8) opus-4.5-thinking - Claude 4.5 Opus (Thinking)"
