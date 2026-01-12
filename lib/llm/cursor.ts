@@ -1,0 +1,235 @@
+/**
+ * Cursor runtime implementation
+ *
+ * Executes prompts using the `agent` CLI with support for:
+ * - Streaming JSON output
+ * - Model selection
+ * - Automated and interactive modes
+ *
+ * Based on the runCursorCli() pattern from spec-to-implementation.mjs
+ */
+
+import { spawn } from "child_process";
+import { createInterface } from "readline";
+import type { LLMRuntime, Model, PromptOptions, PromptResult } from "./types.js";
+
+/**
+ * Parse models from `agent models` command output
+ */
+function parseModelsOutput(stdout: string): Model[] {
+  const models: Model[] = [];
+  const lines = stdout.split("\n");
+
+  for (const line of lines) {
+    // Skip header/separator lines
+    if (
+      !line ||
+      line.includes("Available") ||
+      line.includes("---") ||
+      line.includes("Tip:")
+    ) {
+      continue;
+    }
+
+    // Extract model info from lines like: "  8) opus-4.5-thinking - Claude 4.5 Opus (Thinking)"
+    const cleaned = line.replace(/^[\s\d\)\-*]*/, "").trim();
+    if (cleaned) {
+      // Split on " - " to separate ID from description
+      const parts = cleaned.split(" - ");
+      const id = parts[0]?.trim();
+      const description = parts[1]?.trim();
+
+      if (id) {
+        models.push({
+          id,
+          name: description || id,
+          description,
+        });
+      }
+    }
+  }
+
+  return models;
+}
+
+/**
+ * Cursor runtime implementation
+ */
+export const cursorRuntime: LLMRuntime = {
+  name: "cursor",
+  displayName: "Cursor",
+  supportsStreaming: true,
+  supportsTokenTracking: false, // Cursor doesn't provide token usage
+
+  async runPrompt(prompt: string, options?: PromptOptions): Promise<PromptResult> {
+    const startTime = Date.now();
+    const args: string[] = [];
+
+    // Build command arguments
+    if (options?.automated) {
+      args.push("-p", "--force", "--output-format", "stream-json");
+    }
+
+    if (options?.model) {
+      args.push("--model", options.model);
+    }
+
+    args.push(prompt);
+
+    return new Promise((resolve) => {
+      let output = "";
+
+      const proc = spawn("agent", args, {
+        stdio: ["inherit", "pipe", "pipe"],
+        cwd: options?.workingDirectory,
+        shell: false,
+      });
+
+      const rl = createInterface({ input: proc.stdout });
+
+      rl.on("line", (line) => {
+        if (options?.streamOutput) {
+          // Parse and display streaming output
+          try {
+            const event = JSON.parse(line);
+
+            switch (event.type) {
+              case "system":
+                if (event.subtype === "init" && event.session_id) {
+                  console.log(`  Session: ${event.session_id.substring(0, 8)}...`);
+                }
+                break;
+
+              case "thinking":
+                if (event.subtype === "delta" && event.text) {
+                  process.stdout.write(event.text);
+                  output += event.text;
+                }
+                break;
+
+              case "tool_call":
+                if (event.tool_call && event.subtype === "started") {
+                  const toolKeys = Object.keys(event.tool_call);
+                  for (const key of toolKeys) {
+                    const toolData = event.tool_call[key];
+                    const toolName = key.replace(/ToolCall$/, "");
+                    let argsPreview = "";
+                    if (toolData.args) {
+                      if (toolData.args.path) {
+                        argsPreview = toolData.args.path;
+                      } else if (toolData.args.command) {
+                        argsPreview = toolData.args.command.substring(0, 60);
+                      }
+                    }
+                    console.log(`  > ${toolName}: ${argsPreview}`);
+                  }
+                }
+                break;
+
+              case "assistant":
+                if (event.message?.content) {
+                  for (const block of event.message.content) {
+                    if (block.type === "text" && block.text) {
+                      console.log(block.text);
+                      output += block.text + "\n";
+                    }
+                  }
+                }
+                break;
+
+              case "result":
+                if (event.duration_ms) {
+                  console.log(`  Completed in ${(event.duration_ms / 1000).toFixed(1)}s`);
+                }
+                break;
+            }
+          } catch {
+            // Not JSON, print as-is
+            console.log(line);
+            output += line + "\n";
+          }
+        } else {
+          output += line + "\n";
+        }
+      });
+
+      proc.stderr.on("data", (data) => {
+        output += data.toString();
+        if (options?.streamOutput) {
+          process.stderr.write(data);
+        }
+      });
+
+      proc.on("close", (code) => {
+        const durationMs = Date.now() - startTime;
+        const exitCode = code ?? 1;
+
+        resolve({
+          success: exitCode === 0,
+          output,
+          exitCode,
+          durationMs,
+        });
+      });
+
+      proc.on("error", (err) => {
+        const durationMs = Date.now() - startTime;
+        resolve({
+          success: false,
+          output: err.message,
+          exitCode: 1,
+          durationMs,
+        });
+      });
+    });
+  },
+
+  async listModels(): Promise<Model[]> {
+    return new Promise((resolve) => {
+      let stdout = "";
+
+      const proc = spawn("agent", ["models"], {
+        stdio: ["inherit", "pipe", "pipe"],
+      });
+
+      proc.stdout.on("data", (data) => {
+        stdout += data.toString();
+      });
+
+      proc.on("close", (code) => {
+        if (code === 0) {
+          resolve(parseModelsOutput(stdout));
+        } else {
+          // Return fallback models if command fails
+          resolve([
+            { id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4" },
+            { id: "claude-opus-4-20250514", name: "Claude Opus 4" },
+            { id: "gpt-4o", name: "GPT-4o" },
+            { id: "o3", name: "O3" },
+          ]);
+        }
+      });
+
+      proc.on("error", () => {
+        // Return fallback models if command fails
+        resolve([
+          { id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4" },
+          { id: "claude-opus-4-20250514", name: "Claude Opus 4" },
+          { id: "gpt-4o", name: "GPT-4o" },
+        ]);
+      });
+    });
+  },
+
+  async isAvailable(): Promise<boolean> {
+    return new Promise((resolve) => {
+      const proc = spawn("which", ["agent"]);
+      proc.on("close", (code) => {
+        resolve(code === 0);
+      });
+      proc.on("error", () => {
+        resolve(false);
+      });
+    });
+  },
+};
