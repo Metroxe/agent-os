@@ -367,7 +367,9 @@ function runCursorCli(config, prompt) {
                       if (success.linesAdded || success.linesRemoved) {
                         console.log(
                           chalk.dim(
-                            `       +${success.linesAdded || 0} / -${success.linesRemoved || 0} lines`
+                            `       +${success.linesAdded || 0} / -${
+                              success.linesRemoved || 0
+                            } lines`
                           )
                         );
                       }
