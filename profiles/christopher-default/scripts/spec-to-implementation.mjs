@@ -361,30 +361,55 @@ function runCursorCli(config, prompt) {
                   // Show result preview - handle different result structures
                   const success = toolData.result?.success;
                   if (success) {
-                    // Shell commands have stdout/stderr, others have content
-                    let output = success.content || success.stdout || success.interleavedOutput;
-                    if (output) {
-                      const preview =
-                        typeof output === "string"
-                          ? output.substring(0, 80).replace(/\n/g, " ").trim()
-                          : JSON.stringify(output).substring(0, 80);
-                      if (preview) {
+                    // Edit tools have message and diff stats
+                    if (success.message) {
+                      console.log(chalk.green(`    └─ ${success.message}`));
+                      if (success.linesAdded || success.linesRemoved) {
                         console.log(
                           chalk.dim(
-                            `    └─ ${preview}${output.length > 80 ? "..." : ""}`
+                            `       +${success.linesAdded || 0} / -${success.linesRemoved || 0} lines`
                           )
                         );
                       }
+                    } else {
+                      // Shell commands have stdout/stderr, others have content
+                      let output =
+                        success.content ||
+                        success.stdout ||
+                        success.interleavedOutput;
+                      if (output) {
+                        const preview =
+                          typeof output === "string"
+                            ? output.substring(0, 80).replace(/\n/g, " ").trim()
+                            : JSON.stringify(output).substring(0, 80);
+                        if (preview) {
+                          console.log(
+                            chalk.dim(
+                              `    └─ ${preview}${
+                                output.length > 80 ? "..." : ""
+                              }`
+                            )
+                          );
+                        }
+                      }
                     }
                     // Show exit code for shell commands if non-zero
-                    if (success.exitCode !== undefined && success.exitCode !== 0) {
-                      console.log(chalk.yellow(`    └─ Exit code: ${success.exitCode}`));
+                    if (
+                      success.exitCode !== undefined &&
+                      success.exitCode !== 0
+                    ) {
+                      console.log(
+                        chalk.yellow(`    └─ Exit code: ${success.exitCode}`)
+                      );
                     }
                   } else if (toolData.result?.error) {
                     // Handle error - could be string or object
-                    const errMsg = typeof toolData.result.error === "string"
-                      ? toolData.result.error
-                      : (toolData.result.error.message || toolData.result.error.errorMessage || JSON.stringify(toolData.result.error));
+                    const errMsg =
+                      typeof toolData.result.error === "string"
+                        ? toolData.result.error
+                        : toolData.result.error.message ||
+                          toolData.result.error.errorMessage ||
+                          JSON.stringify(toolData.result.error);
                     console.log(
                       chalk.red(`    └─ Error: ${errMsg.substring(0, 80)}`)
                     );
