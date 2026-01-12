@@ -202,12 +202,65 @@ async function detectCompletedSteps() {
 }
 
 /**
+ * Format tool use for display
+ */
+function formatToolUse(toolName, toolInput) {
+  try {
+    const input = typeof toolInput === "string" ? JSON.parse(toolInput) : toolInput;
+    
+    switch (toolName) {
+      case "Read":
+        return `Reading ${input.file_path || input.path || "file"}`;
+      case "Write":
+        return `Writing ${input.file_path || input.path || "file"}`;
+      case "Edit":
+      case "StrReplace":
+        return `Editing ${input.file_path || input.path || "file"}`;
+      case "Grep":
+      case "Search":
+        const pattern = input.pattern || input.query || "";
+        const searchPath = input.path || input.directory || ".";
+        return `Searching "${pattern.substring(0, 40)}${pattern.length > 40 ? "..." : ""}" in ${searchPath}`;
+      case "Glob":
+        return `Finding files: ${input.pattern || input.glob_pattern || "*"}`;
+      case "LS":
+      case "ListDir":
+        return `Listing ${input.path || input.directory || "."}`;
+      case "Bash":
+      case "Shell":
+        const cmd = input.command || "";
+        return `Running: ${cmd.substring(0, 50)}${cmd.length > 50 ? "..." : ""}`;
+      case "WebSearch":
+        return `Searching web: ${input.query || input.search_term || ""}`;
+      case "TodoRead":
+        return "Reading todo list";
+      case "TodoWrite":
+        return "Updating todo list";
+      case "Task":
+        return `Task: ${(input.description || "").substring(0, 40)}...`;
+      default:
+        // Try to extract something useful from the input
+        const firstKey = Object.keys(input)[0];
+        if (firstKey && typeof input[firstKey] === "string") {
+          const val = input[firstKey];
+          return `${toolName}: ${val.substring(0, 40)}${val.length > 40 ? "..." : ""}`;
+        }
+        return toolName;
+    }
+  } catch {
+    return toolName;
+  }
+}
+
+/**
  * Run a command with real-time streaming output using spawn
  */
 function runCommandWithStreaming(cmd, args) {
   return new Promise((resolve, reject) => {
     let output = "";
     let jsonLines = [];
+    // Track blocks by index
+    let blocks = {}; // { index: { type, name, input } }
 
     const proc = spawn(cmd, args, {
       stdio: ["inherit", "pipe", "pipe"],
@@ -223,23 +276,61 @@ function runCommandWithStreaming(cmd, args) {
         const event = JSON.parse(line);
         jsonLines.push(event);
 
-        // Handle different event types
+        // Handle different event types based on Claude CLI stream-json format
         if (event.type === "assistant") {
+          // Full assistant message (usually at the end)
           if (event.message?.content) {
             for (const block of event.message.content) {
               if (block.type === "text") {
-                process.stdout.write(block.text);
-                output += block.text;
+                console.log(block.text);
+                output += block.text + "\n";
+              } else if (block.type === "tool_use") {
+                // Tool use in final message
+                const toolDisplay = formatToolUse(block.name, block.input);
+                console.log(chalk.cyan(`  ➤ ${toolDisplay}`));
               }
             }
           }
+        } else if (event.type === "content_block_start") {
+          // Start of a new content block - track by index
+          const idx = event.index;
+          if (event.content_block?.type === "tool_use") {
+            blocks[idx] = {
+              type: "tool_use",
+              name: event.content_block.name || "tool",
+              input: "",
+            };
+          } else if (event.content_block?.type === "text") {
+            blocks[idx] = { type: "text", content: "" };
+          }
         } else if (event.type === "content_block_delta") {
-          if (event.delta?.text) {
+          const idx = event.index;
+          // Streaming delta
+          if (event.delta?.type === "text_delta" && event.delta?.text) {
             process.stdout.write(event.delta.text);
             output += event.delta.text;
+            if (blocks[idx]) {
+              blocks[idx].content = (blocks[idx].content || "") + event.delta.text;
+            }
+          } else if (event.delta?.type === "input_json_delta" && event.delta?.partial_json) {
+            // Accumulate tool input JSON
+            if (blocks[idx]) {
+              blocks[idx].input = (blocks[idx].input || "") + event.delta.partial_json;
+            }
           }
+        } else if (event.type === "content_block_stop") {
+          // End of content block
+          const idx = event.index;
+          const block = blocks[idx];
+          if (block && block.type === "tool_use") {
+            // Show what tool was used with its input
+            const toolDisplay = formatToolUse(block.name, block.input);
+            console.log(chalk.cyan(`  ➤ ${toolDisplay}`));
+          }
+          // Clean up
+          delete blocks[idx];
         } else if (event.type === "result") {
-          // Extract usage from result
+          // Final result with usage info
           if (event.usage) {
             tokenUsage.totalInputTokens += event.usage.input_tokens || 0;
             tokenUsage.totalOutputTokens += event.usage.output_tokens || 0;
@@ -251,9 +342,20 @@ function runCommandWithStreaming(cmd, args) {
           if (event.total_cost_usd) {
             tokenUsage.totalCostUsd += event.total_cost_usd;
           }
+          // Show cost summary for this step
+          if (event.total_cost_usd) {
+            console.log("");
+            console.log(
+              chalk.dim(
+                `  Step cost: ${formatCost(event.total_cost_usd)} | ` +
+                `${formatNumber(event.usage?.input_tokens || 0)} in / ` +
+                `${formatNumber(event.usage?.output_tokens || 0)} out`
+              )
+            );
+          }
         }
       } catch {
-        // Not JSON, just print it
+        // Not JSON, just print it (e.g., startup messages)
         console.log(line);
         output += line + "\n";
       }
