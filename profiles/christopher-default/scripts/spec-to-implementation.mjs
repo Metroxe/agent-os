@@ -907,7 +907,9 @@ async function main() {
     hasUncommittedChanges = true;
     console.log(chalk.yellow("⚠ Warning: You have uncommitted changes."));
     console.log("");
-    console.log("If you proceed and create a new branch, these changes will be");
+    console.log(
+      "If you proceed and create a new branch, these changes will be"
+    );
     console.log("moved to the new implementation branch.");
     console.log("");
     const continueChoice =
@@ -1101,9 +1103,17 @@ async function main() {
         // IMPORTANT: Always create new branches from main to prevent
         // accidentally branching from another implementation branch
         if (currentBranch !== "main") {
-          log(chalk.yellow(`⚠ Currently on '${currentBranch}', switching to 'main' first...`));
+          log(
+            chalk.yellow(
+              `⚠ Currently on '${currentBranch}', switching to 'main' first...`
+            )
+          );
           if (hasUncommittedChanges) {
-            log(chalk.dim("  (Your uncommitted changes will be brought to the new branch)"));
+            log(
+              chalk.dim(
+                "  (Your uncommitted changes will be brought to the new branch)"
+              )
+            );
           }
           await $`git checkout main`.quiet();
           await $`git pull --ff-only origin main`.quiet().catch(() => {});
