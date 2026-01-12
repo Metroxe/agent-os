@@ -437,7 +437,19 @@ get_profile_files() {
         fi
 
         if [[ -d "$search_dir" ]]; then
-            find "$search_dir" -type f \( -name "*.md" -o -name "*.yml" -o -name "*.yaml" -o -name "*.sh" -o -name "*.ts" -o -name "*.mts" -o -name "*.js" -o -name "*.mjs" \) 2>/dev/null | while read file; do
+            # Find files with known extensions OR executable files without extension (compiled binaries)
+            {
+                # Find files with known extensions
+                find "$search_dir" -type f \( -name "*.md" -o -name "*.yml" -o -name "*.yaml" -o -name "*.sh" -o -name "*.ts" -o -name "*.mts" -o -name "*.js" -o -name "*.mjs" \) 2>/dev/null
+                # Find executable files without extension (compiled binaries)
+                find "$search_dir" -type f -perm +111 2>/dev/null | while read file; do
+                    local filename=$(basename "$file")
+                    # Only include files without extension (no dot in filename)
+                    if [[ "$filename" != *.* ]]; then
+                        echo "$file"
+                    fi
+                done
+            } | while read file; do
                 relative_path="${file#$profile_dir/}"
 
                 # Check if excluded
@@ -1468,6 +1480,7 @@ install_improve_skills_command() {
 }
 
 # Install utility scripts from profile to project
+# Copies compiled binaries and shell scripts, skips source files (.ts, .mjs) and test files
 install_utility_scripts() {
     local scripts_count=0
     local target_dir="$PROJECT_DIR/agent-os/scripts"
@@ -1486,11 +1499,43 @@ install_utility_scripts() {
 
     ensure_dir "$target_dir"
 
+    # First, collect all binary names (files without extension) to know which source files to skip
+    local binary_names=""
+    while read file; do
+        if [[ "$file" == scripts/* ]]; then
+            local filename=$(basename "$file")
+            # Check if this is a binary (no extension)
+            if [[ "$filename" != *.* ]]; then
+                binary_names="$binary_names $filename"
+            fi
+        fi
+    done <<< "$script_files"
+
     while read file; do
         if [[ "$file" == scripts/* ]]; then
             local source=$(get_profile_file "$EFFECTIVE_PROFILE" "$file" "$BASE_DIR")
             local filename=$(basename "$file")
             local dest="$target_dir/$filename"
+
+            # Skip test files (*.test.ts, *.test.js, etc.)
+            if [[ "$filename" == *.test.* ]]; then
+                print_verbose "Skipping test file: $filename"
+                continue
+            fi
+
+            # Skip TypeScript/JavaScript source files if a compiled binary exists
+            if [[ "$filename" == *.ts ]] || [[ "$filename" == *.mts ]] || [[ "$filename" == *.js ]] || [[ "$filename" == *.mjs ]]; then
+                # Get the base name without extension
+                local base_name="${filename%.*}"
+                # Handle double extensions like .test.ts
+                base_name="${base_name%.test}"
+                
+                # Check if a binary with this name exists
+                if [[ " $binary_names " == *" $base_name "* ]]; then
+                    print_verbose "Skipping source file (binary exists): $filename"
+                    continue
+                fi
+            fi
 
             if [[ -f "$source" ]]; then
                 cp "$source" "$dest"

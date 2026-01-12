@@ -34,3 +34,6 @@ node_modules/
 *.temp
 
 agent-os-old
+
+# Compiled binaries/bundles
+profiles/christopher-default/scripts/spec-to-implementation
