@@ -260,22 +260,181 @@ function formatToolUse(toolName, toolInput) {
 }
 
 /**
+ * Run Cursor CLI with streaming JSON output
+ * Uses --output-format stream-json for real-time streaming
+ */
+function runCursorCli(config, prompt) {
+  return new Promise((resolve, reject) => {
+    // Build args array
+    const args = [];
+    
+    if (config.execMode === "automated") {
+      args.push("-p", "--force", "--output-format", "stream-json");
+    }
+    
+    // Add model flag if present
+    if (config.modelFlag) {
+      args.push(...config.modelFlag.split(" "));
+    }
+    
+    // Add the prompt
+    args.push(prompt);
+    
+    console.log(chalk.dim(`  $ agent ${args.slice(0, -1).join(" ")} "<prompt>..."`));
+    console.log(""); // Add spacing before output
+    
+    let capturedOutput = "";
+    let currentThinking = "";
+    let isShowingThinking = false;
+    
+    const proc = spawn("agent", args, {
+      stdio: ["inherit", "pipe", "pipe"],
+    });
+    
+    const rl = createInterface({ input: proc.stdout });
+    
+    rl.on("line", (line) => {
+      try {
+        const event = JSON.parse(line);
+        capturedOutput += line + "\n";
+        
+        switch (event.type) {
+          case "system":
+            if (event.subtype === "init") {
+              console.log(chalk.dim(`  Session: ${event.session_id?.substring(0, 8)}...`));
+            }
+            break;
+            
+          case "thinking":
+            if (event.subtype === "delta" && event.text) {
+              if (!isShowingThinking) {
+                process.stdout.write(chalk.magenta("  [Thinking] "));
+                isShowingThinking = true;
+              }
+              currentThinking += event.text;
+              process.stdout.write(chalk.magenta(event.text));
+            } else if (event.subtype === "completed") {
+              if (isShowingThinking) {
+                console.log(""); // End thinking line
+                isShowingThinking = false;
+              }
+            }
+            break;
+            
+          case "tool_call":
+            // Tool calls - extract tool name and args/result
+            if (event.tool_call) {
+              const toolKeys = Object.keys(event.tool_call);
+              for (const key of toolKeys) {
+                const toolData = event.tool_call[key];
+                // Extract tool name from key (e.g., "readToolCall" -> "Read")
+                const toolName = key.replace(/ToolCall$/, "").replace(/([A-Z])/g, " $1").trim();
+                
+                if (event.subtype === "started") {
+                  // Show tool starting with args
+                  let argsPreview = "";
+                  if (toolData.args) {
+                    if (toolData.args.path) {
+                      argsPreview = toolData.args.path;
+                    } else if (toolData.args.command) {
+                      argsPreview = toolData.args.command.substring(0, 60);
+                    } else if (toolData.args.pattern) {
+                      argsPreview = `"${toolData.args.pattern}"`;
+                    } else if (toolData.args.query) {
+                      argsPreview = toolData.args.query.substring(0, 60);
+                    } else {
+                      argsPreview = JSON.stringify(toolData.args).substring(0, 60);
+                    }
+                  }
+                  console.log(chalk.cyan(`  ➤ ${toolName}: ${argsPreview}`));
+                } else if (event.subtype === "completed") {
+                  // Show result preview
+                  if (toolData.result?.success?.content) {
+                    const content = toolData.result.success.content;
+                    const preview = typeof content === "string" 
+                      ? content.substring(0, 80).replace(/\n/g, " ")
+                      : JSON.stringify(content).substring(0, 80);
+                    console.log(chalk.dim(`    └─ ${preview}${content.length > 80 ? "..." : ""}`));
+                  } else if (toolData.result?.error) {
+                    console.log(chalk.red(`    └─ Error: ${toolData.result.error}`));
+                  }
+                }
+              }
+            }
+            break;
+            
+          case "assistant":
+            // Final assistant message
+            if (event.message?.content) {
+              console.log(""); // Add spacing
+              for (const block of event.message.content) {
+                if (block.type === "text" && block.text) {
+                  console.log(block.text);
+                }
+              }
+            }
+            break;
+            
+          case "result":
+            // Final result
+            if (event.duration_ms) {
+              console.log("");
+              console.log(chalk.dim(`  Completed in ${(event.duration_ms / 1000).toFixed(1)}s`));
+            }
+            break;
+        }
+      } catch {
+        // Non-JSON line, just print it
+        console.log(line);
+        capturedOutput += line + "\n";
+      }
+    });
+    
+    proc.stderr.on("data", (data) => {
+      const text = data.toString();
+      capturedOutput += text;
+      process.stderr.write(chalk.red(text));
+    });
+    
+    proc.on("close", (code) => {
+      console.log(""); // Newline after output
+      if (code === 0) {
+        resolve({ output: capturedOutput, exitCode: 0 });
+      } else {
+        const error = new Error(`agent exited with code ${code}`);
+        error.exitCode = code;
+        error.output = capturedOutput;
+        reject(error);
+      }
+    });
+    
+    proc.on("error", (err) => {
+      console.error("Failed to start agent:", err.message);
+      reject({ output: "", error: err, exitCode: 1 });
+    });
+  });
+}
+
+/**
  * Format tool result for display (truncate if too long)
  */
 function formatToolResult(content, maxLines = 5) {
   if (!content) return "";
-  
-  const str = typeof content === "string" ? content : JSON.stringify(content, null, 2);
+
+  const str =
+    typeof content === "string" ? content : JSON.stringify(content, null, 2);
   const lines = str.split("\n");
-  
+
   if (lines.length <= maxLines) {
-    return lines.map(l => chalk.dim(`    │ ${l}`)).join("\n");
+    return lines.map((l) => chalk.dim(`    │ ${l}`)).join("\n");
   }
-  
+
   const shown = lines.slice(0, maxLines);
   const remaining = lines.length - maxLines;
-  return shown.map(l => chalk.dim(`    │ ${l}`)).join("\n") + 
-    chalk.dim(`\n    │ ... (${remaining} more lines)`);
+  return (
+    shown.map((l) => chalk.dim(`    │ ${l}`)).join("\n") +
+    chalk.dim(`\n    │ ... (${remaining} more lines)`)
+  );
 }
 
 /**
@@ -483,20 +642,10 @@ async function runCliWithTracking(phaseName, prompt) {
         $.stdio = "pipe";
       }
     } else {
-      // Cursor CLI
-      const modelArgs = cliConfig.modelFlag
-        ? cliConfig.modelFlag.split(" ").filter(Boolean)
-        : [];
-
-      if (cliConfig.execMode === "automated") {
-        const args = ["-p", "--force", ...modelArgs, prompt];
-        const result = await runCommandWithStreaming("agent", args);
-        cliOutput = result.output;
-      } else {
-        $.stdio = "inherit";
-        await $`agent ${modelArgs} ${prompt}`;
-        $.stdio = "pipe";
-      }
+      // Cursor CLI - use spawn with inherited stdio for real-time output
+      // Cursor CLI doesn't support JSON streaming, so we just show raw output
+      const result = await runCursorCli(cliConfig, prompt);
+      cliOutput = result.output;
     }
   } catch (error) {
     cliOutput = error.output || "";
@@ -736,22 +885,29 @@ async function main() {
       const modelsOutput = await $`agent models`.quiet();
       const lines = modelsOutput.stdout.split("\n");
       for (const line of lines) {
-        if (!line || line.includes("Available") || line.includes("---"))
+        if (!line || line.includes("Available") || line.includes("---") || line.includes("Tip:"))
           continue;
-        const model = line.replace(/^[\s\-*]*/, "").trim();
-        if (model) models.push(model);
+        // Extract just the model ID (before the " - " separator)
+        // Lines look like: "  8) opus-4.5-thinking - Claude 4.5 Opus (Thinking)"
+        const cleaned = line.replace(/^[\s\d\)\-*]*/, "").trim();
+        if (cleaned) {
+          // Extract model ID (first part before " - ")
+          const modelId = cleaned.split(" - ")[0].trim();
+          const displayName = cleaned;
+          if (modelId) models.push({ id: modelId, display: displayName });
+        }
       }
     } catch {
       models = [
-        "claude-sonnet-4-20250514",
-        "claude-opus-4-20250514",
-        "gpt-4o",
-        "o3",
+        { id: "claude-sonnet-4-20250514", display: "Claude Sonnet 4" },
+        { id: "claude-opus-4-20250514", display: "Claude Opus 4" },
+        { id: "gpt-4o", display: "GPT-4o" },
+        { id: "o3", display: "O3" },
       ];
     }
 
     for (let i = 0; i < models.length; i++) {
-      log(`  ${i + 2}) ${models[i]}`);
+      log(`  ${i + 2}) ${models[i].display}`);
     }
     log("");
 
@@ -763,7 +919,8 @@ async function main() {
 
     if (modelChoice > 1 && modelChoice <= maxChoice) {
       const selectedModel = models[modelChoice - 2];
-      modelFlag = `--model ${selectedModel}`;
+      modelFlag = `--model ${selectedModel.id}`;
+      log(`Selected model ID: ${selectedModel.id}`);
     }
     log("");
   }
