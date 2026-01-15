@@ -1,0 +1,20 @@
+# Cursor ignore configuration
+# Use ! prefix to explicitly INCLUDE gitignored files that the agent should access
+
+# Include .vscode directory (gitignored but needed for project settings)
+!.vscode/
+!.vscode/**
+
+# Include lib/dist for accessing compiled output if needed
+!lib/dist/
+!lib/dist/**
+
+# Include compiled scripts
+!profiles/christopher-default/scripts/spec-to-implementation
+
+# Include any log files that might be created during implementation
+!**/*.log
+!**/implementation-log.txt
+
+# Include temporary files created during spec implementation
+!**/.executed_prompts
