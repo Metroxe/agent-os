@@ -29,6 +29,13 @@ export { claudeRuntime } from "./claude.js";
 export { cursorRuntime } from "./cursor.js";
 export { opencodeRuntime, getOllamaHostConfig } from "./opencode.js";
 
+// Export shared formatting helpers
+export {
+  formatToolCallInline,
+  formatToolResult,
+  formatToolUse,
+} from "./formatting.js";
+
 // Module loaded marker for testing
 export const LLM_MODULE_LOADED = true;
 

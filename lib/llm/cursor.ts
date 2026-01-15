@@ -2,15 +2,18 @@
  * Cursor runtime implementation
  *
  * Executes prompts using the `agent` CLI with support for:
- * - Streaming JSON output
+ * - Streaming JSON output with colored output
  * - Model selection
  * - Automated and interactive modes
+ * - Access to authenticated CLI tools via --sandbox disabled
  *
  * Based on the runCursorCli() pattern from spec-to-implementation.mjs
  */
 
+import chalk from "chalk";
 import { spawn } from "child_process";
 import { createInterface } from "readline";
+import { formatToolResult, formatToolUse } from "./formatting.js";
 import type { LLMRuntime, Model, PromptOptions, PromptResult } from "./types.js";
 
 /**
@@ -74,10 +77,14 @@ export const cursorRuntime: LLMRuntime = {
       args.push("--model", options.model);
     }
 
+    // Disable sandbox to enable access to authenticated gh CLI and system credentials
+    args.push("--sandbox", "disabled");
+
     args.push(prompt);
 
     return new Promise((resolve) => {
       let output = "";
+      let thinkingStarted = false; // Track if we've started a thinking block
 
       const proc = spawn("agent", args, {
         stdio: ["inherit", "pipe", "pipe"],
@@ -89,44 +96,71 @@ export const cursorRuntime: LLMRuntime = {
 
       rl.on("line", (line) => {
         if (options?.streamOutput) {
-          // Parse and display streaming output
+          // Parse and display streaming output with colors
           try {
             const event = JSON.parse(line);
 
             switch (event.type) {
               case "system":
+                // Subtype: init - show session ID with dim formatting
                 if (event.subtype === "init" && event.session_id) {
-                  console.log(`  Session: ${event.session_id.substring(0, 8)}...`);
+                  console.log(chalk.dim(`  Session: ${event.session_id.substring(0, 8)}...`));
                 }
                 break;
 
               case "thinking":
+                // Subtype: delta - show thinking output in magenta
                 if (event.subtype === "delta" && event.text) {
-                  process.stdout.write(event.text);
+                  if (!thinkingStarted) {
+                    process.stdout.write(chalk.magenta("[Thinking] "));
+                    thinkingStarted = true;
+                  }
+                  process.stdout.write(chalk.magenta(event.text));
                   output += event.text;
+                }
+                // Subtype: completed - finalize thinking display
+                else if (event.subtype === "completed") {
+                  if (thinkingStarted) {
+                    console.log(""); // Newline after thinking block
+                    thinkingStarted = false;
+                  }
                 }
                 break;
 
               case "tool_call":
+                // Subtype: started - show tool name and args preview in cyan
                 if (event.tool_call && event.subtype === "started") {
                   const toolKeys = Object.keys(event.tool_call);
                   for (const key of toolKeys) {
                     const toolData = event.tool_call[key];
                     const toolName = key.replace(/ToolCall$/, "");
-                    let argsPreview = "";
-                    if (toolData.args) {
-                      if (toolData.args.path) {
-                        argsPreview = toolData.args.path;
-                      } else if (toolData.args.command) {
-                        argsPreview = toolData.args.command.substring(0, 60);
+                    // Use shared formatToolUse helper for consistent formatting
+                    const toolDisplay = formatToolUse(toolName, toolData.args || {});
+                    console.log(chalk.cyan(`  ➤ ${toolDisplay}`));
+                  }
+                }
+                // Subtype: completed - show tool results
+                else if (event.tool_call && event.subtype === "completed") {
+                  const toolKeys = Object.keys(event.tool_call);
+                  for (const key of toolKeys) {
+                    const toolData = event.tool_call[key];
+                    if (toolData.result) {
+                      // Use shared formatToolResult helper for consistent formatting
+                      const resultPreview = formatToolResult(toolData.result);
+                      if (resultPreview) {
+                        console.log(resultPreview);
                       }
                     }
-                    console.log(`  > ${toolName}: ${argsPreview}`);
+                    // Show non-zero exit codes in yellow
+                    if (toolData.exitCode !== undefined && toolData.exitCode !== 0) {
+                      console.log(chalk.yellow(`    Exit code: ${toolData.exitCode}`));
+                    }
                   }
                 }
                 break;
 
               case "assistant":
+                // Display final message content
                 if (event.message?.content) {
                   for (const block of event.message.content) {
                     if (block.type === "text" && block.text) {
@@ -138,8 +172,16 @@ export const cursorRuntime: LLMRuntime = {
                 break;
 
               case "result":
+                // Display completion time in dim
                 if (event.duration_ms) {
-                  console.log(`  Completed in ${(event.duration_ms / 1000).toFixed(1)}s`);
+                  console.log(chalk.dim(`  Completed in ${(event.duration_ms / 1000).toFixed(1)}s`));
+                }
+                break;
+
+              case "error":
+                // Show errors in red
+                if (event.message) {
+                  console.log(chalk.red(`  Error: ${event.message}`));
                 }
                 break;
             }
