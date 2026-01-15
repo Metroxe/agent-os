@@ -12,6 +12,7 @@
 
 import chalk from "chalk";
 import { spawn } from "child_process";
+import ora, { type Ora } from "ora";
 import { createInterface } from "readline";
 import { formatToolResult, formatToolUse } from "./formatting.js";
 import type {
@@ -27,7 +28,7 @@ import type {
  * Tracks content blocks by index during streaming
  */
 interface StreamingBlock {
-  type: "text" | "tool_use" | "tool_result";
+  type: "text" | "tool_use" | "tool_result" | "thinking";
   name?: string;
   input?: string;
   content?: string;
@@ -112,9 +113,28 @@ export const claudeRuntime: LLMRuntime = {
     return new Promise((resolve) => {
       let output = "";
       const jsonLines: string[] = [];
+      let thinkingStarted = false; // Track if we've started a thinking block
+      let spinnerStopped = false; // Track if spinner has been stopped
 
       // Block tracking system - track blocks by their index
       const blocks: Record<number, StreamingBlock> = {};
+
+      // Create spinner for waiting state
+      let spinner: Ora | null = null;
+      if (options?.streamOutput) {
+        spinner = ora({
+          text: "Waiting for Claude...",
+          spinner: "dots",
+        }).start();
+      }
+
+      // Helper to stop spinner on first output
+      const stopSpinner = () => {
+        if (spinner && !spinnerStopped) {
+          spinner.stop();
+          spinnerStopped = true;
+        }
+      };
 
       const proc = spawn("claude", args, {
         stdio: ["inherit", "pipe", "pipe"],
@@ -132,6 +152,11 @@ export const claudeRuntime: LLMRuntime = {
           try {
             const event = JSON.parse(line);
 
+            // Verbose mode: print raw JSON before formatted output
+            if (options?.verbose) {
+              console.log(chalk.gray(`[VERBOSE] ${line}`));
+            }
+
             // Handle content_block_start - begin tracking new blocks
             if (event.type === "content_block_start") {
               const idx = event.index;
@@ -145,6 +170,8 @@ export const claudeRuntime: LLMRuntime = {
                 blocks[idx] = { type: "text", content: "" };
               } else if (event.content_block?.type === "tool_result") {
                 blocks[idx] = { type: "tool_result", content: "" };
+              } else if (event.content_block?.type === "thinking") {
+                blocks[idx] = { type: "thinking", content: "" };
               }
             }
             // Handle content_block_delta - accumulate content
@@ -153,11 +180,29 @@ export const claudeRuntime: LLMRuntime = {
 
               // Text delta - stream in real-time
               if (event.delta?.type === "text_delta" && event.delta?.text) {
+                stopSpinner();
                 process.stdout.write(event.delta.text);
                 output += event.delta.text;
                 if (blocks[idx]) {
                   blocks[idx].content =
                     (blocks[idx].content || "") + event.delta.text;
+                }
+              }
+              // Thinking delta - stream in magenta with [Thinking] prefix
+              else if (
+                event.delta?.type === "thinking_delta" &&
+                event.delta?.thinking
+              ) {
+                stopSpinner();
+                if (!thinkingStarted) {
+                  process.stdout.write(chalk.magenta("[Thinking] "));
+                  thinkingStarted = true;
+                }
+                process.stdout.write(chalk.magenta(event.delta.thinking));
+                output += event.delta.thinking;
+                if (blocks[idx]) {
+                  blocks[idx].content =
+                    (blocks[idx].content || "") + event.delta.thinking;
                 }
               }
               // Tool input JSON delta - accumulate for later display
@@ -178,16 +223,23 @@ export const claudeRuntime: LLMRuntime = {
 
               if (block && block.type === "tool_use") {
                 // Show what tool was used with its input
+                stopSpinner();
                 const toolDisplay = formatToolUse(
                   block.name || "tool",
                   block.input || ""
                 );
                 console.log(chalk.cyan(`  ➤ ${toolDisplay}`));
               } else if (block && block.type === "tool_result") {
-                // Show tool result
+                // Show tool result (detect tool type from content structure)
                 const resultPreview = formatToolResult(block.content);
                 if (resultPreview) {
                   console.log(resultPreview);
+                }
+              } else if (block && block.type === "thinking") {
+                // End thinking block with newline
+                if (thinkingStarted) {
+                  console.log(""); // Newline after thinking block
+                  thinkingStarted = false;
                 }
               }
 
@@ -241,6 +293,24 @@ export const claudeRuntime: LLMRuntime = {
                 );
               }
             }
+            // Log unknown event types only in verbose mode
+            else if (options?.verbose) {
+              const knownTypes = [
+                "content_block_start",
+                "content_block_delta",
+                "content_block_stop",
+                "assistant",
+                "user",
+                "result",
+                "message_start",
+                "message_delta",
+                "message_stop",
+                "ping",
+              ];
+              if (!knownTypes.includes(event.type)) {
+                console.log(chalk.yellow(`[VERBOSE] Unknown event type: ${event.type}`));
+              }
+            }
           } catch {
             // Not JSON, just capture it
             console.log(line);
@@ -259,6 +329,7 @@ export const claudeRuntime: LLMRuntime = {
       });
 
       proc.on("close", (code) => {
+        stopSpinner(); // Ensure spinner is stopped
         if (options?.streamOutput) {
           console.log(""); // Newline after output
         }

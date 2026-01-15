@@ -64,6 +64,7 @@ interface CliConfig {
   runtime: LLMRuntime;
   model: string | undefined;
   execMode: "automated" | "interactive";
+  verbose: boolean;
 }
 
 // Global state
@@ -193,6 +194,7 @@ async function runCliWithTracking(
       model: cliConfig.model,
       automated: cliConfig.execMode === "automated",
       streamOutput: true,
+      verbose: cliConfig.verbose,
     });
 
     // Track token usage for Claude Code
@@ -264,6 +266,7 @@ async function runAiCommit(
       model: cliConfig.model,
       automated: cliConfig.execMode === "automated",
       streamOutput: true,
+      verbose: cliConfig.verbose,
     });
 
     if (result.tokenUsage) {
@@ -401,7 +404,17 @@ function displayFinalSummary(): void {
 // === MAIN SCRIPT ===
 
 async function main(): Promise<void> {
-  const specInput = process.argv[2] || "";
+  // Parse command line arguments
+  const args = process.argv.slice(2);
+  const verboseIndex = args.findIndex(arg => arg === "--verbose" || arg === "-v");
+  const isVerbose = verboseIndex !== -1;
+  
+  // Remove verbose flag from args to get spec input
+  if (isVerbose) {
+    args.splice(verboseIndex, 1);
+  }
+  
+  const specInput = args[0] || "";
 
   if (!specInput) {
     console.log("Usage: ./spec-to-implementation <spec-folder-name>");
@@ -543,7 +556,13 @@ async function main(): Promise<void> {
     runtime,
     model: selectedModel,
     execMode,
+    verbose: isVerbose,
   };
+
+  if (isVerbose) {
+    log("  [Verbose mode enabled - raw JSON will be displayed]");
+    log("");
+  }
 
   log(`Using ${runtime.displayName} in ${execMode} mode.`);
   log("");
@@ -758,6 +777,28 @@ async function main(): Promise<void> {
   log("");
   log("To resume this run later:");
   log(`  ./spec-to-implementation ${specFolder}`);
+
+  // === Return to Main Branch Option ===
+  // Only prompt if we were on an implementation branch
+  if (branchConfig.useBranch && branchConfig.originalBranch) {
+    log("");
+    const returnToMain = await confirmPrompt({
+      message: `Return to ${branchConfig.originalBranch} branch?`,
+      defaultValue: true,
+    });
+
+    if (returnToMain) {
+      try {
+        await gitWorkflow.checkout(branchConfig.originalBranch);
+        log(`Switched to branch: ${branchConfig.originalBranch}`);
+      } catch (err) {
+        const error = err as Error;
+        log(`Warning: Could not switch branches: ${error.message}`);
+      }
+    } else {
+      log(`Staying on branch: ${branchConfig.branchName}`);
+    }
+  }
 
   // Final save
   await saveLogToFile();
