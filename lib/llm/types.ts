@@ -37,6 +37,8 @@ export interface PromptOptions {
   streamOutput?: boolean;
   /** Working directory for the command */
   workingDirectory?: string;
+  /** Verbose mode - print raw JSON for all events before formatted output */
+  verbose?: boolean;
 }
 
 /**

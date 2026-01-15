@@ -36,10 +36,11 @@
 #
 # HOW IT WORKS:
 #   1. Scans profile scripts directories for .ts files
-#   2. Compiles each .ts file to a standalone binary using `bun build --compile`
-#   3. Outputs binary with same name, no extension (e.g., foo.ts -> foo)
-#   4. Target: macOS ARM only (bun-darwin-arm64)
-#   5. Simple compilation only - no tests, linting, or type-checking
+#   2. Excludes test files (*.test.ts and *.spec.ts) from compilation
+#   3. Compiles each remaining .ts file to a standalone binary using `bun build --compile`
+#   4. Outputs binary with same name, no extension (e.g., foo.ts -> foo)
+#   5. Target: macOS ARM only (bun-darwin-arm64)
+#   6. Simple compilation only - no tests, linting, or type-checking
 #
 # =============================================================================
 
@@ -180,7 +181,7 @@ build_profile() {
     local count=0
     local failed=0
     
-    # Find all .ts files in the scripts directory
+    # Find all .ts files in the scripts directory, excluding test files (*.test.ts, *.spec.ts)
     while IFS= read -r -d '' ts_file; do
         # Skip if looking for specific script
         if [[ -n "$SCRIPT_NAME" ]]; then
@@ -195,7 +196,7 @@ build_profile() {
         else
             ((failed++)) || true
         fi
-    done < <(find "$scripts_dir" -maxdepth 1 -name "*.ts" -type f -print0 2>/dev/null)
+    done < <(find "$scripts_dir" -maxdepth 1 -name "*.ts" -type f -not -name "*.test.ts" -not -name "*.spec.ts" -print0 2>/dev/null)
     
     if [[ $count -gt 0 ]] || [[ $failed -gt 0 ]]; then
         if [[ $failed -eq 0 ]]; then
