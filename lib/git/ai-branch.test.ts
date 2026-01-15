@@ -225,6 +225,113 @@ describe("AI-Driven Git Branch Management", () => {
         const prompt = generatePRCreationPrompt("test-spec");
         expect(prompt).toContain("--base main");
       });
+
+      // Focused tests for Task Group 3: AI-Driven PR Creation
+      describe("Implementation Log Handling", () => {
+        it("should include full path to implementation-log.txt for reading", () => {
+          const specFolder = "2026-01-14-my-feature";
+          const prompt = generatePRCreationPrompt(specFolder);
+          
+          // Verify the prompt includes the correct path for checking/reading the log
+          expect(prompt).toContain(`agent-os/specs/${specFolder}/implementation/implementation-log.txt`);
+        });
+
+        it("should instruct AI to check if log exists before reading", () => {
+          const prompt = generatePRCreationPrompt("test-spec");
+          
+          // Verify the prompt tells AI to check for existence first
+          expect(prompt).toContain("Check if");
+          expect(prompt).toContain("exists");
+          expect(prompt).toContain("implementation-log.txt");
+        });
+
+        it("should instruct AI to include log contents in PR body", () => {
+          const prompt = generatePRCreationPrompt("test-spec");
+          
+          // Verify the prompt instructs including log in PR body
+          expect(prompt).toContain("read its contents");
+          expect(prompt).toContain("PR body");
+          expect(prompt).toContain("Implementation Log");
+        });
+
+        it("should instruct AI to remove implementation-log.txt after PR creation", () => {
+          const prompt = generatePRCreationPrompt("test-spec");
+          
+          // Verify the prompt instructs removal with git rm
+          expect(prompt).toContain("git rm");
+          expect(prompt).toContain("implementation-log.txt");
+          expect(prompt).toContain("after PR is created");
+        });
+
+        it("should instruct AI to commit the log removal", () => {
+          const prompt = generatePRCreationPrompt("test-spec");
+          
+          // Verify there's a commit after git rm
+          expect(prompt).toContain("Commit:");
+          expect(prompt).toContain("remove implementation log");
+          expect(prompt).toContain("contents in PR");
+        });
+
+        it("should instruct AI to push after removing log", () => {
+          const prompt = generatePRCreationPrompt("test-spec");
+          
+          // Verify there's a push instruction after the git rm commit
+          const lines = prompt.split('\n');
+          const gitRmIndex = lines.findIndex(l => l.includes('git rm'));
+          const pushAfterRm = lines.slice(gitRmIndex).some(l => l.includes('Push:') || l.includes('git push'));
+          
+          expect(gitRmIndex).toBeGreaterThan(-1);
+          expect(pushAfterRm).toBe(true);
+        });
+      });
+
+      describe("PR Body Content", () => {
+        it("should instruct AI to include Summary section in PR body", () => {
+          const prompt = generatePRCreationPrompt("test-spec");
+          expect(prompt).toContain("## Summary");
+        });
+
+        it("should instruct AI to include Implementation Log section in PR body", () => {
+          const prompt = generatePRCreationPrompt("test-spec");
+          expect(prompt).toContain("## Implementation Log");
+        });
+
+        it("should instruct AI to wrap log contents in details/summary block", () => {
+          const prompt = generatePRCreationPrompt("test-spec");
+          expect(prompt).toContain("details/summary");
+        });
+
+        it("should instruct AI to include review checklist in PR body", () => {
+          const prompt = generatePRCreationPrompt("test-spec");
+          expect(prompt).toContain("Review Checklist");
+        });
+      });
+
+      describe("PR Creation Command", () => {
+        it("should use gh pr create command", () => {
+          const prompt = generatePRCreationPrompt("test-spec");
+          expect(prompt).toContain("gh pr create");
+        });
+
+        it("should include title with spec folder", () => {
+          const specFolder = "2026-01-14-my-feature";
+          const prompt = generatePRCreationPrompt(specFolder);
+          expect(prompt).toContain(`--title "feat: ${specFolder}"`);
+        });
+
+        it("should push branch before creating PR", () => {
+          const prompt = generatePRCreationPrompt("test-spec");
+          
+          // Verify push comes before PR creation
+          const lines = prompt.split('\n');
+          const pushIndex = lines.findIndex(l => l.includes('git push -u origin'));
+          const prCreateIndex = lines.findIndex(l => l.includes('gh pr create'));
+          
+          expect(pushIndex).toBeGreaterThan(-1);
+          expect(prCreateIndex).toBeGreaterThan(-1);
+          expect(pushIndex).toBeLessThan(prCreateIndex);
+        });
+      });
     });
 
     describe("Branch State Evaluation Prompt", () => {
