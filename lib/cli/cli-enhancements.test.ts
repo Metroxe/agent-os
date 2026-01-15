@@ -77,55 +77,6 @@ describe("CLI Enhancements", () => {
     });
   });
 
-  describe("Progress Spinners", () => {
-    it("should have spinner module available", async () => {
-      // Test that ora module can be imported
-      const ora = await import("ora");
-      expect(ora.default).toBeDefined();
-    });
-
-    it("should create spinner with correct configuration", async () => {
-      const ora = await import("ora");
-      
-      // Test spinner creation
-      const spinner = ora.default({
-        text: "Waiting for response...",
-        spinner: "dots",
-      });
-
-      expect(spinner).toBeDefined();
-      expect(spinner.start).toBeDefined();
-      expect(spinner.stop).toBeDefined();
-      expect(spinner.succeed).toBeDefined();
-    });
-
-    it("should stop spinner when text streaming begins", async () => {
-      // Test the spinner control flow
-      let spinnerRunning = true;
-      let spinnerStopped = false;
-
-      const mockSpinner = {
-        start: () => { spinnerRunning = true; },
-        stop: () => { spinnerRunning = false; spinnerStopped = true; },
-      };
-
-      // Simulate receiving first text delta
-      const onTextDelta = () => {
-        if (spinnerRunning) {
-          mockSpinner.stop();
-        }
-      };
-
-      mockSpinner.start();
-      expect(spinnerRunning).toBe(true);
-
-      // Simulate text streaming starts
-      onTextDelta();
-      expect(spinnerRunning).toBe(false);
-      expect(spinnerStopped).toBe(true);
-    });
-  });
-
   describe("Return to Main Branch", () => {
     const originalEnv = process.env.HEADLESS;
 

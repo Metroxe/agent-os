@@ -12,7 +12,6 @@
 
 import chalk from "chalk";
 import { spawn } from "child_process";
-import ora, { type Ora } from "ora";
 import { createInterface } from "readline";
 import { formatToolResult, formatToolUse } from "./formatting.js";
 import type {
@@ -114,27 +113,9 @@ export const claudeRuntime: LLMRuntime = {
       let output = "";
       const jsonLines: string[] = [];
       let thinkingStarted = false; // Track if we've started a thinking block
-      let spinnerStopped = false; // Track if spinner has been stopped
 
       // Block tracking system - track blocks by their index
       const blocks: Record<number, StreamingBlock> = {};
-
-      // Create spinner for waiting state
-      let spinner: Ora | null = null;
-      if (options?.streamOutput) {
-        spinner = ora({
-          text: "Waiting for Claude...",
-          spinner: "dots",
-        }).start();
-      }
-
-      // Helper to stop spinner on first output
-      const stopSpinner = () => {
-        if (spinner && !spinnerStopped) {
-          spinner.stop();
-          spinnerStopped = true;
-        }
-      };
 
       const proc = spawn("claude", args, {
         stdio: ["inherit", "pipe", "pipe"],
@@ -180,7 +161,6 @@ export const claudeRuntime: LLMRuntime = {
 
               // Text delta - stream in real-time
               if (event.delta?.type === "text_delta" && event.delta?.text) {
-                stopSpinner();
                 process.stdout.write(event.delta.text);
                 output += event.delta.text;
                 if (blocks[idx]) {
@@ -193,7 +173,6 @@ export const claudeRuntime: LLMRuntime = {
                 event.delta?.type === "thinking_delta" &&
                 event.delta?.thinking
               ) {
-                stopSpinner();
                 if (!thinkingStarted) {
                   process.stdout.write(chalk.magenta("[Thinking] "));
                   thinkingStarted = true;
@@ -223,7 +202,6 @@ export const claudeRuntime: LLMRuntime = {
 
               if (block && block.type === "tool_use") {
                 // Show what tool was used with its input
-                stopSpinner();
                 const toolDisplay = formatToolUse(
                   block.name || "tool",
                   block.input || ""
@@ -329,7 +307,6 @@ export const claudeRuntime: LLMRuntime = {
       });
 
       proc.on("close", (code) => {
-        stopSpinner(); // Ensure spinner is stopped
         if (options?.streamOutput) {
           console.log(""); // Newline after output
         }

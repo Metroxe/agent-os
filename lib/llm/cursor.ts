@@ -12,7 +12,6 @@
 
 import chalk from "chalk";
 import { spawn } from "child_process";
-import ora, { type Ora } from "ora";
 import { createInterface } from "readline";
 import { formatToolResult, formatToolUse } from "./formatting.js";
 import type { LLMRuntime, Model, PromptOptions, PromptResult } from "./types.js";
@@ -86,24 +85,6 @@ export const cursorRuntime: LLMRuntime = {
     return new Promise((resolve) => {
       let output = "";
       let thinkingStarted = false; // Track if we've started a thinking block
-      let spinnerStopped = false; // Track if spinner has been stopped
-
-      // Create spinner for waiting state
-      let spinner: Ora | null = null;
-      if (options?.streamOutput) {
-        spinner = ora({
-          text: "Waiting for Cursor...",
-          spinner: "dots",
-        }).start();
-      }
-
-      // Helper to stop spinner on first output
-      const stopSpinner = () => {
-        if (spinner && !spinnerStopped) {
-          spinner.stop();
-          spinnerStopped = true;
-        }
-      };
 
       const proc = spawn("agent", args, {
         stdio: ["inherit", "pipe", "pipe"],
@@ -128,7 +109,6 @@ export const cursorRuntime: LLMRuntime = {
               case "system":
                 // Subtype: init - show session ID with dim formatting
                 if (event.subtype === "init" && event.session_id) {
-                  stopSpinner();
                   console.log(chalk.dim(`  Session: ${event.session_id.substring(0, 8)}...`));
                 }
                 break;
@@ -136,7 +116,6 @@ export const cursorRuntime: LLMRuntime = {
               case "thinking":
                 // Subtype: delta - show thinking output in magenta
                 if (event.subtype === "delta" && event.text) {
-                  stopSpinner();
                   if (!thinkingStarted) {
                     process.stdout.write(chalk.magenta("[Thinking] "));
                     thinkingStarted = true;
@@ -156,7 +135,6 @@ export const cursorRuntime: LLMRuntime = {
               case "tool_call":
                 // Subtype: started - show tool name and args preview in cyan
                 if (event.tool_call && event.subtype === "started") {
-                  stopSpinner();
                   const toolKeys = Object.keys(event.tool_call);
                   for (const key of toolKeys) {
                     const toolData = event.tool_call[key];
@@ -239,7 +217,6 @@ export const cursorRuntime: LLMRuntime = {
       });
 
       proc.on("close", (code) => {
-        stopSpinner(); // Ensure spinner is stopped
         const durationMs = Date.now() - startTime;
         const exitCode = code ?? 1;
 
